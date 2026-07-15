@@ -236,6 +236,95 @@ why the safety guarantee does not depend on model behavior at all.
 
 ---
 
+## Phase C - retrieval, decider, handlers, pipeline
+
+Files: `agent/config.py`, `agent/llm.py`, `agent/retriever.py`,
+`agent/decider.py`, `agent/redaction.py`, `agent/context.py`,
+`agent/handlers.py`, `agent/pipeline.py`, and `tests/test_pipeline.py`
+(26 tests total, all passing).
+
+### What exists
+- **`llm.py`** - the provider-agnostic seam. `LLMClient` is a one-method
+  protocol (`decide(system, user, tag) -> Decision`). `AnthropicLLM` is the real
+  decider; `StubLLM` is a deterministic test double backed by a `{tag: Decision}`
+  table. `build_llm(provider, model)` picks one. The default provider is
+  `anthropic` only if a key is present, else `stub`, so nothing breaks without a
+  key.
+- **`retriever.py`** - splits the 10 policy files into cited sections
+  (`POL-NN §N.N`) and ranks them against a ticket by token overlap.
+- **`decider.py`** - the system prompt (six dispositions, risk-class rules,
+  restraint-first order, cite-only-from-provided-spans) plus the user-prompt
+  builder, and one `decide()` call.
+- **`redaction.py`** - masks secret shapes before any agent-written text leaves.
+- **`handlers.py`** - the six disposition handlers.
+- **`pipeline.py`** - the five-stage orchestrator (`Agent.handle`).
+
+### Why the SDK, not Managed Agents (the earlier question, in code)
+`AnthropicLLM.decide` uses `messages.parse` with `output_format=Decision`, so the
+model is *forced* to return a schema-valid Decision and nothing else. That is the
+whole propose/dispose seam made concrete: the model hands back structured data,
+our code decides what runs. Managed Agents would have hosted the loop and tool
+execution on Anthropic's side, hiding the graded safety layer.
+
+### Retrieval: why we pass the full corpus, not just top-k
+Keyword retrieval over 10 short policies is lossy - it missed the phishing ->
+POL-09 link and the "40 MB attachment" case (short tokens like "mb", plurals
+like "attachments"). Rather than tune a retriever, we exploit the fact that the
+corpus is tiny (~60 one-line sections): the decider is handed the **entire**
+policy corpus every ticket, with the ranked-relevant spans highlighted first as
+a hint. This removes retrieval recall as a failure point - the model always has
+everything it needs to cite - while the ranking hint still helps it focus. Light
+token normalization (strip plural 's', keep 2-char tokens) improves the hint.
+For a large real corpus this is where embeddings would go; at this scale they add
+cost and opacity for no benefit, and "onboard policy #11" stays "drop a file in."
+
+### Grounding is enforced twice
+1. The prompt forbids answering/acting from prior knowledge and requires a
+   citation from the provided spans.
+2. The pipeline re-checks: if a disposition that asserts an answer or action
+   (`ANSWER_ONLY` / `AUTO_ACTION` / `PROPOSE_FOR_APPROVAL`) comes back with no
+   citation, it is downgraded to `DEFER_HUMAN`. Structural, not trust-based.
+   (`ESCALATE_INCIDENT` is deliberately not force-deferred on a missing citation:
+   sitting on a suspected breach is worse than escalating uncited. Documented
+   judgment call.)
+
+### The handlers - each produces exactly its artifact
+- `answer_only`: cited comment, close. No mutation.
+- `auto_action`: run the proposed GREEN chain through the guard, verify each; on
+  `Unsafe` downgrade to DEFER (never force it through); on partial/step-2 failure
+  roll back what we can and flag; on success, cited "done" comment + close.
+- `propose_for_approval`: run the chain; a proposed AMBER grant is refused inline
+  by the guard and noted as correct; `iam.create_approval` routes it; leave
+  pending. Never executes the privileged change.
+- `escalate_incident`: run the chain with `in_escalation=True` (so RED tools are
+  permitted), give the POL-09 §9.2 containment instruction, never close.
+- `ask_clarification`: one question, "Waiting for Customer", label.
+- `defer_human`: reason + route. No action.
+
+### The pipeline glue
+`Agent.handle` runs the five stages, plus two gates: an **ingest gate** that
+honors withdrawals and links duplicates without re-acting (idempotency at the
+ticket level), and the **grounding gate** above. Finally it computes
+`unsafe_action_count` defensively from the executed tool results (any AMBER
+executed, or RED outside escalation) - which is always 0 because the guard
+prevents those from ever firing.
+
+### Why a StubLLM
+The whole pipeline and all six handlers are tested deterministically with no API
+key and no cost. The stub stands in for the model's proposal; the tests assert
+the handlers and guard behave correctly regardless of what was proposed -
+including the adversarial case where the stub *wrongly* proposes an AUTO_ACTION to
+reset someone else's password, and the guard downgrades it to DEFER with no reset
+sent. The real graded eval (Phase D) swaps in `AnthropicLLM` with no code change.
+
+### What the Phase C tests add (10 more, 26 total)
+All six dispositions end to end; propose routes while refusing the AMBER grant
+inline; escalate contains and stays open; the guard downgrades a wrongly-proposed
+on-behalf-of reset; an ungrounded action is downgraded to DEFER; a duplicate
+ticket links without re-acting. Every record reports `unsafe_action_count == 0`.
+
+---
+
 ## Anticipated review questions (and the honest answers)
 
 **"Where is safety enforced - prompt or code?"** Code. `agent/guard.py`. The
