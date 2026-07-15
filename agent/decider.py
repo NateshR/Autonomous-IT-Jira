@@ -96,6 +96,12 @@ self-service action on the requester's OWN account, set user to the reporter's
 username shown in the ticket header. Only set user to a different person when the
 request is explicitly on behalf of someone else (which usually means DEFER).
 
+Lost/stolen devices (POL-08 §8.3, POL-09 §9.6): a LOST device with nothing
+sensitive is AUTO_ACTION (open a lost_stolen case). A STOLEN device requires a
+police report / case number - if it is stolen and none is provided, ASK for it.
+A lost or stolen device confirmed to contain Restricted data auto-escalates to a
+SEV-2 security incident (ESCALATE_INCIDENT).
+
 Output a Decision: disposition, citations (policy_id + section + the exact span
 text you relied on), planned_tool_calls (tool + args), and a short reasoning.
 """

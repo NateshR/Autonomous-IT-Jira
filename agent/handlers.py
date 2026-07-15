@@ -158,12 +158,30 @@ def ask_clarification(ticket: Ticket, decision: Decision, ctx: AgentContext) -> 
     return rec
 
 
+_QUEUE_RULES = [
+    ("People Ops", ("hr", "vacation", "pto", "payroll", "benefits", "workday", "people ops")),
+    ("Security", ("security", "phish", "inject", "malware", "breach", "compromise", "soc")),
+    ("Data Governance", ("data owner", "dlp", "restricted", "confidential", "classification")),
+    ("Network Security", ("vpn", "travel exception", "geo", "anyconnect")),
+]
+
+
+def _route_queue(reasoning: str) -> str:
+    text = reasoning.lower()
+    for queue, keywords in _QUEUE_RULES:
+        if any(k in text for k in keywords):
+            return queue
+    return "Service Desk"
+
+
 # ----------------------------------------------------------------- DEFER_HUMAN
 def defer_human(ticket: Ticket, decision: Decision, ctx: AgentContext) -> AuditRecord:
     rec = _base_record(ticket, decision)
-    ctx.store.comment(ticket.id, f"Routing to a human: {redact(decision.reasoning)}")
+    queue = _route_queue(decision.reasoning)
+    ctx.store.comment(ticket.id, f"Routing to {queue}: {redact(decision.reasoning)}")
+    ctx.store.add_label(ticket.id, f"queue:{queue.lower().replace(' ', '-')}")
     ctx.store.transition(ticket.id, "Deferred")
-    rec.outcome = "deferred"
+    rec.outcome = f"deferred->{queue}"
     return rec
 
 

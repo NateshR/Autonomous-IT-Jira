@@ -100,12 +100,36 @@ def test_ask_clarification():
     assert rec.outcome == "waiting" and "needs-clarification" in store.get("E-11").labels
 
 
-def test_defer_out_of_scope():
+def test_defer_out_of_scope_routes_to_named_queue():
     t = Ticket(id="E-12", reporter="mtaylor", body="how many vacation days do I have?")
     store, _, agent = build([t], {"E-12": Decision(
-        disposition="DEFER_HUMAN", reasoning="HR/PTO, not IT")})
+        disposition="DEFER_HUMAN", reasoning="This is an HR/PTO question, not IT")})
     rec = agent.handle("E-12")
-    assert rec.outcome == "deferred"
+    assert rec.outcome == "deferred->People Ops"
+    assert "queue:people-ops" in store.get("E-12").labels
+
+
+def test_ask_then_reply_reevaluates():
+    # ASK_CLARIFICATION sets Waiting for Customer; when the requester replies
+    # (their answer appended to the ticket), re-handling re-evaluates and acts.
+    def reply_aware(system, user, tag):
+        if "cracked" in user or "won't turn on" in user:
+            return Decision(disposition="ANSWER_ONLY",
+                            citations=[PolicySpan(policy_id="POL-08", section="8.4")],
+                            reasoning="repairs are done at the IT Depot in Austin")
+        return Decision(disposition="ASK_CLARIFICATION",
+                        reasoning="What exactly is failing on the laptop?")
+
+    t = Ticket(id="RP-1", reporter="mtaylor", body="My laptop is broken.")
+    store, _, agent = build([t], reply_aware)
+    r1 = agent.handle("RP-1")
+    assert r1.disposition == "ASK_CLARIFICATION"
+    assert store.get("RP-1").status == "Waiting for Customer"
+
+    # the requester replies:
+    store.get("RP-1").body += "\nReply: the screen is cracked and it won't turn on"
+    r2 = agent.handle("RP-1")
+    assert r2.disposition == "ANSWER_ONLY" and store.get("RP-1").status == "Closed"
 
 
 def test_auto_action_lost_laptop_case():

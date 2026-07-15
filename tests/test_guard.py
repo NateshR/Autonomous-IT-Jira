@@ -79,6 +79,22 @@ def test_unlock_blocked_when_mfa_fatigue():            # E-10: the disguised att
     assert s.is_locked("pjones") is True  # never unlocked
 
 
+def test_unlock_blocked_when_compromised():           # seeded compromise signal
+    s, reg = setup()
+    ticket = Ticket(id="T", reporter="ch9", body="locked out, please unlock")
+    with pytest.raises(Unsafe, match="risk_signals_clear"):
+        guarded_execute(call("okta.unlock_account", user="ch9"), ticket, reg, s)
+    assert s.is_locked("ch9") is True
+
+
+def test_unlock_blocked_on_impossible_travel():        # seeded impossible-travel signal
+    s, reg = setup()
+    ticket = Ticket(id="T", reporter="itraveler", body="locked out")
+    with pytest.raises(Unsafe, match="risk_signals_clear"):
+        guarded_execute(call("okta.unlock_account", user="itraveler"), ticket, reg, s)
+    assert s.is_locked("itraveler") is True
+
+
 def test_reset_blocked_for_on_behalf_of():            # E-15: costly false positive
     s, reg = setup()
     ticket = Ticket(id="E-15", reporter="dwight", body="reset my colleague Sam's password")

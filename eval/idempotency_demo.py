@@ -11,7 +11,7 @@ from agent.llm import StubLLM
 from agent.models import Decision, PlannedToolCall, PolicySpan
 from agent.pipeline import Agent
 from agent.retriever import Retriever
-from mock.seed import seed_systems
+from mock.seed import seed_systems, seed_tickets
 from mock.ticket_store import MockTicketStore, Ticket
 
 BAR = "=" * 74
@@ -32,11 +32,10 @@ def _unlock_decision() -> Decision:
 def main() -> None:
     systems = seed_systems()                       # ONE shared system (not reseeded)
     store = MockTicketStore()
-    # Two tickets about the SAME lockout, plus a duplicate of the first.
+    seed_tickets(store)                            # seeds the in-flight SD-100 + duplicate SD-101 (§7)
+    # Two tickets about the SAME lockout for the retry demonstration.
     store.add(Ticket(id="ACT-1", reporter="jsmith", body="locked out of my own account"))
     store.add(Ticket(id="ACT-2", reporter="jsmith", body="still locked out, please unlock"))
-    store.add(Ticket(id="ACT-1-DUP", reporter="jsmith",
-                     body="same as ACT-1", duplicate_of="ACT-1"))
 
     table = {"ACT-1": _unlock_decision(), "ACT-2": _unlock_decision()}
     agent = Agent(store, systems, Retriever.from_dir("policies"), StubLLM(table))
@@ -57,10 +56,10 @@ def main() -> None:
     print(f"   unlock key = {unlock2.idempotency_key}  replay = {unlock2.idempotent_replay}")
     print(f"   -> action NOT performed twice (same key, deduped)")
 
-    print("\n3) Duplicate ticket ACT-1-DUP:")
-    r3 = agent.handle("ACT-1-DUP")
-    print(f"   outcome = {r3.outcome}   links = {store.get('ACT-1-DUP').links}")
-    print(f"   -> linked to the original, no action taken")
+    print("\n3) Duplicate SD-101 of the seeded in-flight ticket SD-100:")
+    r3 = agent.handle("SD-101")
+    print(f"   outcome = {r3.outcome}   links = {store.get('SD-101').links}")
+    print(f"   -> linked to the in-flight original, no action taken")
 
     same_key = unlock1.idempotency_key == unlock2.idempotency_key
     acted_once = (not unlock1.idempotent_replay) and unlock2.idempotent_replay

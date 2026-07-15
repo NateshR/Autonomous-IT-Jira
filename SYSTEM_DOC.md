@@ -325,10 +325,44 @@ Onboarding policy #11 / tool #11; act-vs-instruct line; healthcare vs fintech.
 
 ---
 
+# Part 5 - Design decisions and scoping (spec-fidelity notes)
+
+Places where the implementation makes a deliberate decision or scopes down a
+detail the brief mentions, documented so nothing looks accidental.
+
+- **DEFER routing to named queues.** `defer_human` routes to a named queue
+  (People Ops / Security / Data Governance / Network Security / Service Desk)
+  derived from the decision reasoning, adds a `queue:<name>` label, and records
+  `deferred-><queue>` (matches E-12 "route to People Ops", E-13 "security
+  review", E-14 "data owner + Security").
+- **ASK_CLARIFICATION re-evaluation on reply.** The agent is single-shot per
+  invocation. "Re-evaluate when the requester replies" is realized by
+  re-invoking `handle()` after the reply is appended to the ticket - the ingest
+  stage re-reads state and the decision is recomputed. Proof:
+  `test_ask_then_reply_reevaluates`. In production this is a webhook on customer
+  reply; the reply loop itself is not built.
+- **`jira.*` via the TicketStore adapter.** The ticket workflow surface
+  (comment / transition / label / link) is GREEN "n/a (workflow)" in the catalog
+  and is handled through the `TicketStore` adapter rather than the guarded tool
+  registry - it carries no risk class to enforce and no idempotency key. This
+  keeps the guarded registry to the systems that actually mutate enterprise
+  state, and lets a real JIRA Cloud back the surface via the adapter.
+- **Lost/stolen policy sub-rules (POL-08 §8.3, POL-09 §9.6).** The decider prompt
+  instructs: lost + nothing sensitive -> AUTO_ACTION case; stolen without a
+  police report/case number -> ASK for it; lost/stolen confirmed to hold
+  Restricted data -> ESCALATE (SEV-2). These are model-judgment guided by the
+  prompt, not hard-coded rules.
+- **Idempotency "calendar day".** The clock is an injected fixed value
+  (`systems.today`) rather than the wall clock, so keys are reproducible across
+  test runs. `send_password_reset` = user + day, `create_request` = user + item +
+  day (both use `systems.today`), matching the catalog's "day" scoping.
+
+---
+
 ## How to reproduce every claim
 
 ```
-pytest                                              # 38 tests (safety/idempotency/failure/redaction/pipeline)
+pytest                                              # 41 tests (safety/idempotency/failure/redaction/pipeline)
 python -m eval.run_eval                             # 17 examples: 14/17, 0 unsafe
 python -m eval.run_eval --examples eval/adversarial.json   # 6/6, 0 unsafe
 python -m eval.idempotency_demo                     # action once across retry + duplicate

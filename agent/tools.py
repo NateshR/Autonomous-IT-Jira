@@ -64,8 +64,10 @@ def _revoke_key(t: Ticket, a: dict) -> str:           # user + incident
     return f"{a.get('user')}:{a.get('incident', t.id)}"
 
 
-def _request_key(t: Ticket, a: dict) -> str:          # user + item + day (day via ticket)
-    return f"{t.reporter}:{a.get('item')}:{t.id}"
+def _request_key(s: MockSystems) -> IdemFn:           # user + item + day
+    def key(t: Ticket, a: dict) -> str:
+        return f"{t.reporter}:{a.get('item')}:{s.today}"
+    return key
 
 
 def _admin_key(t: Ticket, a: dict) -> str:            # user + session (ticket as session)
@@ -161,7 +163,7 @@ def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
             fn=s.okta_force_password_reset),
         "servicenow.create_request": Tool(
             "servicenow.create_request", "GREEN",
-            idem=_request_key, verify=_v_request_filed,
+            idem=_request_key(s), verify=_v_request_filed,
             fn=s.servicenow_create_request),
         "endpoint.grant_admin": Tool(
             "endpoint.grant_admin", "GREEN",

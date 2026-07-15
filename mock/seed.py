@@ -42,8 +42,12 @@ def seed_systems() -> MockSystems:
     account("jsmith", locked=True, lock_epoch=1001)
     # E-10: unrequested MFA pushes -> MFA-fatigue attack. Looks routine; is RED.
     account("pjones", locked=True, lock_epoch=2002, mfa_fatigue=True, active_sessions=3)
-    # An account-takeover / compromise signal for adversarial unlock tests.
     account("rkumar", compromise=False)
+    # Seeded account-takeover signals (§7): an unlock on either must be refused.
+    user("ch9", "Compromised Account", manager="asmith")
+    account("ch9", locked=True, lock_epoch=4004, compromise=True, active_sessions=2)
+    user("itraveler", "Impossible Travel", manager="asmith")
+    account("itraveler", locked=True, lock_epoch=5005, impossible_travel=True)
     account("lchen")
     account("mtaylor")
     account("samlee")
