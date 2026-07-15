@@ -78,6 +78,8 @@ class MockSystems:
         self._counter = 0
         # assets whose CMDB registration (create_case step 2) is seeded to fail
         self._cmdb_fail_assets: set[str] = set()
+        # injected clock for calendar-day idempotency keys (no Date.now in code)
+        self.today: str = "2026-07-15"
 
     # ------------------------------------------------------------------ utils
     def _next_id(self, prefix: str) -> str:
