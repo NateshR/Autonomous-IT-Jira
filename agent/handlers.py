@@ -8,7 +8,7 @@ comment/transition.
 from __future__ import annotations
 
 from agent.context import AgentContext
-from agent.guard import PartialFailure, Unsafe, guarded_execute
+from agent.guard import PartialFailure, ToolInvocationError, Unsafe, guarded_execute
 from agent.models import AuditRecord, Decision, PlannedToolCall, ToolResult
 from agent.redaction import redact
 from mock.systems import Step2Failure
@@ -49,8 +49,8 @@ def auto_action(ticket: Ticket, decision: Decision, ctx: AgentContext) -> AuditR
             if not r.verified:
                 raise PartialFailure(f"{call.tool} did not verify", completed)
             completed.append(r)
-    except Unsafe as e:
-        # The guard blocked a proposed action. The safe response is to NOT act
+    except (Unsafe, ToolInvocationError) as e:
+        # The guard blocked or could not run a proposed action. The safe response is to NOT act
         # and route to a human - never force it through.
         rec.tool_results = completed
         rec.notes.append(f"guard blocked: {e}")
@@ -91,7 +91,7 @@ def propose_for_approval(ticket: Ticket, decision: Decision, ctx: AgentContext) 
     for call in decision.planned_tool_calls:
         try:
             r = guarded_execute(call, ticket, ctx.registry, ctx.systems)
-        except Unsafe as e:
+        except (Unsafe, ToolInvocationError) as e:
             # Correct behavior: an AMBER grant proposed here is refused inline.
             rec.notes.append(f"refused inline (correct): {e}")
             continue
@@ -124,7 +124,7 @@ def escalate_incident(ticket: Ticket, decision: Decision, ctx: AgentContext) -> 
             if not r.verified:
                 raise PartialFailure(f"{call.tool} did not verify", completed)
             completed.append(r)
-    except (Unsafe, PartialFailure, Step2Failure) as e:
+    except (Unsafe, PartialFailure, Step2Failure, ToolInvocationError) as e:
         _rollback(completed, ctx)
         rec.tool_results = completed
         rec.notes.append(f"containment partial/blocked, flagged: {e}")

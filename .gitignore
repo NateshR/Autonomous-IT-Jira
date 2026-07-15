@@ -16,3 +16,6 @@ eval/*.json.out
 
 # OS
 .DS_Store
+
+# generated eval artifacts
+eval/trace.json

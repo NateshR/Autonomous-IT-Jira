@@ -37,6 +37,10 @@ class Tool:
     idem: IdemFn | None = None
     verify: Callable[[dict, dict, MockSystems], bool] | None = None
     read_only: bool = False
+    # If True and the model omits `user`, the guard defaults it to the ticket
+    # reporter. Safe: these tools act on the requester's own account, so the
+    # target can only ever be the requester (never someone else).
+    self_target: bool = False
 
 
 # --------------------------------------------------------------- idem recipes
@@ -44,20 +48,20 @@ class Tool:
 
 def _unlock_key(s: MockSystems) -> IdemFn:
     def key(t: Ticket, a: dict) -> str:               # account + lock epoch
-        acct = s.accounts.get(a["user"])
+        acct = s.accounts.get(a.get("user"))
         epoch = acct.lock_epoch if acct else 0
-        return f"{a['user']}:{epoch}"
+        return f"{a.get('user')}:{epoch}"
     return key
 
 
 def _reset_key(s: MockSystems) -> IdemFn:
     def key(t: Ticket, a: dict) -> str:               # user + calendar day
-        return f"{a['user']}:{s.today}"
+        return f"{a.get('user')}:{s.today}"
     return key
 
 
 def _revoke_key(t: Ticket, a: dict) -> str:           # user + incident
-    return f"{a['user']}:{a.get('incident', t.id)}"
+    return f"{a.get('user')}:{a.get('incident', t.id)}"
 
 
 def _request_key(t: Ticket, a: dict) -> str:          # user + item + day (day via ticket)
@@ -65,7 +69,7 @@ def _request_key(t: Ticket, a: dict) -> str:          # user + item + day (day v
 
 
 def _admin_key(t: Ticket, a: dict) -> str:            # user + session (ticket as session)
-    return f"{a['user']}:{t.id}"
+    return f"{a.get('user')}:{t.id}"
 
 
 def _case_key(t: Ticket, a: dict) -> str:             # asset + type
@@ -122,36 +126,37 @@ def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
     """Bind the catalog to a concrete mock-systems instance."""
     return {
         # --- read-only (identity / risk / approval status) ------------------
+        # Tolerant of missing/aliased args so a read check never crashes a run.
         "directory.lookup_user": Tool(
-            "directory.lookup_user", "GREEN", read_only=True,
-            fn=lambda user, **_: s.lookup_user(user)),
+            "directory.lookup_user", "GREEN", read_only=True, self_target=True,
+            fn=lambda **kw: s.lookup_user(kw.get("user"))),
         "directory.verify_manager": Tool(
             "directory.verify_manager", "GREEN", read_only=True,
-            fn=lambda manager, subordinate, **_: s.verify_manager(manager, subordinate)),
+            fn=lambda **kw: s.verify_manager(kw.get("manager"), kw.get("subordinate"))),
         "okta.risk_signals": Tool(
-            "okta.risk_signals", "GREEN", read_only=True,
-            fn=lambda user, **_: s.okta_risk_signals(user)),
+            "okta.risk_signals", "GREEN", read_only=True, self_target=True,
+            fn=lambda **kw: s.okta_risk_signals(kw.get("user"))),
         "iam.get_approval": Tool(
             "iam.get_approval", "GREEN", read_only=True,
-            fn=lambda approval_id, **_: s.iam_get_approval(approval_id)),
+            fn=lambda **kw: s.iam_get_approval(kw.get("approval_id"))),
 
         # --- GREEN actions --------------------------------------------------
         "okta.unlock_account": Tool(
             "okta.unlock_account", "GREEN*",
-            requires=["authorized", "risk_signals_clear"],
+            requires=["authorized", "risk_signals_clear"], self_target=True,
             idem=_unlock_key(s), verify=_v_unlocked,
             fn=s.okta_unlock_account),
         "okta.send_password_reset": Tool(
             "okta.send_password_reset", "GREEN",
-            requires=["authorized"],
+            requires=["authorized"], self_target=True,
             idem=_reset_key(s), verify=_v_reset_sent,
             fn=s.okta_send_password_reset),
         "okta.revoke_sessions": Tool(
-            "okta.revoke_sessions", "GREEN",
+            "okta.revoke_sessions", "GREEN", self_target=True,
             idem=_revoke_key, verify=_v_sessions_revoked,
             fn=s.okta_revoke_sessions),
         "okta.force_password_reset": Tool(
-            "okta.force_password_reset", "GREEN",
+            "okta.force_password_reset", "GREEN", self_target=True,
             idem=_revoke_key,   # user + incident, same recipe
             fn=s.okta_force_password_reset),
         "servicenow.create_request": Tool(
@@ -160,7 +165,7 @@ def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
             fn=s.servicenow_create_request),
         "endpoint.grant_admin": Tool(
             "endpoint.grant_admin", "GREEN",
-            requires=["authorized", "minutes_le_60"],
+            requires=["authorized", "minutes_le_60"], self_target=True,
             idem=_admin_key, verify=_v_admin_granted,
             fn=s.endpoint_grant_admin),
         "assetmgmt.create_case": Tool(

@@ -23,13 +23,43 @@ from typing import Callable
 
 from agent.models import PlannedToolCall, ToolResult
 from agent.tools import Tool
-from mock.systems import MockSystems
+from mock.systems import MockSystems, Step2Failure
 from mock.ticket_store import Ticket
 
 
 class Unsafe(Exception):
     """Raised when a proposed action fails a hard safety rule. The real tool is
     never invoked, so nothing unsafe happens."""
+
+
+class ToolInvocationError(Exception):
+    """The model proposed a tool with arguments the tool cannot accept. Not a
+    safety violation - the tool did not run - but the handler must route to a
+    human rather than crash or claim success."""
+
+
+# The model may phrase an argument slightly differently than our signatures.
+# Normalize the common synonyms so a semantically-correct call still executes;
+# anything genuinely malformed falls through to ToolInvocationError.
+_ARG_ALIASES = {
+    "username": "user", "user_name": "user", "account": "user",
+    "account_id": "user", "accountid": "user", "login": "user",
+    "user_id": "user", "userid": "user", "target": "user", "target_user": "user",
+    "min": "minutes", "duration": "minutes", "duration_minutes": "minutes",
+    "approver": "approvers", "sev_level": "sev", "severity": "sev",
+}
+
+
+def _normalize_args(args: dict) -> dict:
+    out: dict = {}
+    for k, v in args.items():
+        out[_ARG_ALIASES.get(k, k)] = v
+    if "minutes" in out:
+        try:
+            out["minutes"] = int(out["minutes"])
+        except (TypeError, ValueError):
+            pass
+    return out
 
 
 class PartialFailure(Exception):
@@ -47,11 +77,9 @@ class PartialFailure(Exception):
 def _authorized(ticket: Ticket, args: dict, s: MockSystems) -> bool:
     """The requester must be acting on their own account. Authority asserted in
     the ticket body is never trusted; on-behalf-of without proof fails here
-    (this is the costly false positive from E-15)."""
-    target = args.get("user")
-    if target is None:
-        return True  # tool does not act on a specific user account
-    return target == ticket.reporter
+    (this is the costly false positive from E-15). A missing target fails closed
+    - this precondition is only attached to user-affecting tools."""
+    return args.get("user") == ticket.reporter
 
 
 def _risk_signals_clear(ticket: Ticket, args: dict, s: MockSystems) -> bool:
@@ -105,6 +133,13 @@ def guarded_execute(
     if call.tool not in registry:
         raise Unsafe(f"{call.tool}: unknown tool")
     tool = registry[call.tool]
+    args = _normalize_args(call.args)
+
+    # Self-service tools act on the requester's own account. If the model omits
+    # the target, default it to the reporter - this can only ever target the
+    # requester themselves, so it never enables an on-behalf-of action.
+    if tool.self_target and not args.get("user"):
+        args["user"] = ticket.reporter
 
     # 1. Risk-class floor (AMBER blocked, RED escalation-only).
     enforce_risk_class(tool, in_escalation)
@@ -114,22 +149,28 @@ def guarded_execute(
         check = PRECHECKS.get(check_name)
         if check is None:
             raise Unsafe(f"{call.tool}: unknown precondition '{check_name}'")
-        if not check(ticket, call.args, systems):
+        if not check(ticket, args, systems):
             raise Unsafe(f"{call.tool}: precondition '{check_name}' failed")
 
-    # 3. Fire once, with an idempotency key for state-changing tools.
-    key = None if tool.read_only or tool.idem is None else tool.idem(ticket, call.args)
-    if key is not None:
-        resp = tool.fn(**call.args, idempotency_key=key)
-    else:
-        resp = tool.fn(**call.args)
-
-    # 4. Verify the effect (skip for read-only tools).
-    verified = True if tool.read_only else _did_effect_take(tool, call.args, resp, systems)
+    # 3. Fire once (idempotency key for state-changing tools), then 4. verify.
+    #    Any arg-shape problem in the key recipe, the call, or the verify is a
+    #    controlled ToolInvocationError - the handler routes to a human rather
+    #    than crashing or claiming success. Step2Failure must still propagate.
+    try:
+        key = None if tool.read_only or tool.idem is None else tool.idem(ticket, args)
+        if key is not None:
+            resp = tool.fn(**args, idempotency_key=key)
+        else:
+            resp = tool.fn(**args)
+        verified = True if tool.read_only else _did_effect_take(tool, args, resp, systems)
+    except Step2Failure:
+        raise
+    except (TypeError, KeyError, AttributeError) as e:
+        raise ToolInvocationError(f"{call.tool}: bad arguments {sorted(args)}: {e}")
 
     return ToolResult(
         tool=call.tool,
-        args=call.args,
+        args=args,
         idempotency_key=key,
         raw_response=resp,
         verified=verified,
