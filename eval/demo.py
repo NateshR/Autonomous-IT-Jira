@@ -20,7 +20,7 @@ from agent.config import SETTINGS
 from agent.llm import build_llm
 from agent.pipeline import Agent
 from agent.retriever import Retriever
-from mock.seed import seed_systems
+from mock.seed import ensure_user, seed_systems
 from mock.ticket_store import MockTicketStore, Ticket
 
 BAR = "=" * 74
@@ -35,6 +35,7 @@ def _load(examples_path: str, ticket_id: str) -> dict | None:
 
 def run(ticket: Ticket, provider: str, model: str, expected: str | None):
     systems = seed_systems()
+    ensure_user(systems, ticket.reporter)
     store = MockTicketStore()
     store.add(ticket)
     retriever = Retriever.from_dir("policies")

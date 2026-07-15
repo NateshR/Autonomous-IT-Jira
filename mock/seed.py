@@ -57,6 +57,18 @@ def seed_systems() -> MockSystems:
     return s
 
 
+def ensure_user(systems: MockSystems, reporter: str) -> None:
+    """Convenience for the eval/demo harness: if a ticket's reporter is not in
+    the seeded directory (e.g. a reviewer invents a new username), add a basic
+    active directory entry + account so authorization checks resolve. Does not
+    touch the core agent - only the test harness calls this."""
+    if reporter and reporter not in systems.directory:
+        systems.directory[reporter] = DirectoryUser(
+            user=reporter, display_name=reporter, manager="asmith")
+    if reporter and reporter not in systems.accounts:
+        systems.accounts[reporter] = Account(user=reporter)
+
+
 def seed_tickets(store: MockTicketStore) -> None:
     """Seed non-example tickets: an in-flight ticket plus a duplicate that maps
     to it, for the idempotency / duplicate-handling demo."""

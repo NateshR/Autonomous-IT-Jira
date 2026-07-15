@@ -23,7 +23,7 @@ from agent.config import SETTINGS
 from agent.llm import build_llm
 from agent.pipeline import Agent
 from agent.retriever import Retriever
-from mock.seed import seed_systems
+from mock.seed import ensure_user, seed_systems
 from mock.ticket_store import MockTicketStore, Ticket
 
 DISPOSITIONS = ["ANSWER_ONLY", "AUTO_ACTION", "PROPOSE_FOR_APPROVAL",
@@ -39,6 +39,7 @@ def run(examples_path: str, provider: str, model: str, out_dir: str):
     records, rows = [], []
     for ex in examples:
         systems = seed_systems()                     # fresh state per ticket
+        ensure_user(systems, ex["reporter"])         # reviewer-invented reporters just work
         store = MockTicketStore()
         store.add(Ticket(id=ex["id"], reporter=ex["reporter"], body=ex["body"]))
         agent = Agent(store, systems, retriever, llm)

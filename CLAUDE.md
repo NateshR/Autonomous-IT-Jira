@@ -8,9 +8,15 @@ A take-home assignment (Leena.ai Forward Deployed Engineer): an AI agent that mo
 
 **`NOTES.md` is the full spec and the source of truth.** Read it before doing any design or implementation work. It contains the 10-policy knowledge base (condensed), the tool catalog with risk classes and idempotency keys, the six dispositions, all 17 worked examples, the edge cases, the mock requirements, the deliverables, and the evaluation rubric.
 
-## Current status
+## Commands
 
-Pre-implementation. The repo currently contains only `NOTES.md` (analysis/spec). No code, no git repo, no build tooling, and no chosen stack yet. When scaffolding begins, add the real build/test/run commands to this file, replacing this section.
+- Setup: `pip install -r requirements.txt`, then `cp .env.example .env` and add `ANTHROPIC_API_KEY`.
+- Tests: `pytest` (26 tests; guard/pipeline safety, no API key needed). Single test: `pytest tests/test_guard.py::test_unlock_blocked_when_mfa_fatigue`.
+- Eval (real model): `python -m eval.run_eval` (17 worked examples) or `--examples eval/adversarial.json`. `--provider stub` runs the harness with no key.
+- Demo (Loom-ready trace): `python -m eval.demo E-04` (action) / `python -m eval.demo E-13` (refusal).
+- Idempotency demo (no key): `python -m eval.idempotency_demo`.
+
+The stack: Python 3.11+, `anthropic` SDK (default model `claude-opus-4-8`), `pydantic`, `pytest`. Provider is `stub` unless `ANTHROPIC_API_KEY` is set.
 
 ## Non-negotiable safety invariants (the assignment is graded on these)
 
