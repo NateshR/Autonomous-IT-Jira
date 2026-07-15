@@ -27,7 +27,9 @@ class AnthropicLLM:
     def __init__(self, model: str) -> None:
         import anthropic  # imported lazily so the stub path needs no dependency
 
-        self._client = anthropic.Anthropic()
+        # Explicit retry/timeout/backoff on the API. The SDK retries connection
+        # errors, 408/409/429, and 5xx with exponential backoff.
+        self._client = anthropic.Anthropic(max_retries=3, timeout=30.0)
         self._model = model
 
     def decide(self, system: str, user: str, tag: str | None = None) -> Decision:

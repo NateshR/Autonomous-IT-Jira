@@ -75,11 +75,12 @@ removes retrieval recall as a failure point.
 ## How grounding is enforced
 
 Two layers. (1) The prompt forbids answering or acting from prior knowledge and
-requires a citation from the provided spans. (2) The pipeline re-checks: any
-disposition that asserts an answer or action (ANSWER_ONLY / AUTO_ACTION /
-PROPOSE_FOR_APPROVAL) with no citation is downgraded to DEFER_HUMAN. Structural,
-not trust-based. (ESCALATE is not force-deferred on a missing citation - sitting
-on a suspected breach is worse than escalating uncited.)
+requires a citation from the provided spans. (2) The pipeline re-checks each
+citation against the corpus: a cited section that does not exist is dropped
+(catches a hallucinated policy), and any answer/action left with no valid
+citation is downgraded to DEFER_HUMAN. Structural, not trust-based. (ESCALATE is
+not force-deferred on a missing citation - sitting on a suspected breach is worse
+than escalating uncited.)
 
 ## The act-vs-instruct line, and why
 
@@ -100,7 +101,9 @@ guard enforces the line in code, not prose:
 Authorization, not just identity: a user-affecting action requires the target to
 be the requester. Authority asserted in a ticket ("my manager said it's fine") is
 never trusted. On-behalf-of without proof fails closed (E-15, the costly false
-positive).
+positive). Blast radius is enforced explicitly: a `no_fan_out` precondition
+refuses a team-wide/multi-target action ("reset the whole team"), and
+self-service tools can only ever target the requester.
 
 ## Idempotency and recovery
 
@@ -111,12 +114,18 @@ state (verify) - the deliberate silent no-op mock returns `verified=False` and i
 never reported as success. Multi-step failures roll back the committed step and
 flag rather than claim a half-done success. See `eval/idempotency_demo.py`.
 
+The Anthropic client is configured with explicit retries and a timeout (SDK
+exponential backoff on connection errors, 408/409/429, 5xx). Mock tool calls are
+in-memory; a real integration would wrap them with the same retry/timeout/backoff
+policy.
+
 ## What I would harden before production
 
 - Real identity provider + a persistent idempotency store (survives restarts).
 - A human review queue and richer approver routing (SoD, delegation).
 - Retrieval quality + a real confidence threshold once the corpus is large.
-- Blast-radius caps enforced in code (recognize and refuse fan-out requests).
+- Configurable blast-radius thresholds + group-target resolution (a keyword +
+  multi-target fan-out guard is already enforced).
 - Stronger secret detection (entropy + context) and per-tenant audit retention.
 - Full observability on the audit trace; per-ticket rate limits and backoff.
 

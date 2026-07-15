@@ -19,6 +19,7 @@ Onboarding a new precondition = add one entry; the guard loop is unchanged.
 
 from __future__ import annotations
 
+import re
 from typing import Callable
 
 from agent.models import PlannedToolCall, ToolResult
@@ -96,10 +97,30 @@ def _minutes_le_60(ticket: Ticket, args: dict, s: MockSystems) -> bool:
     return int(args.get("minutes", 0)) <= 60
 
 
+_FANOUT_RE = re.compile(
+    r"\b(everyone|everybody|team[-\s]wide|all of (us|them))\b"
+    r"|\b(all|every|each|entire|whole)\s+(\w+\s+){0,2}"
+    r"(users?|staff|employees?|accounts?|team|people|members?|colleagues?)\b",
+    re.I,
+)
+
+
+def _no_fan_out(ticket: Ticket, args: dict, s: MockSystems) -> bool:
+    """Blast radius (§6.1): a request that fans out to many users must be routed,
+    never auto-fired. Explicitly refuse when the args name multiple targets or
+    the ticket asks for a group/team-wide action."""
+    for k in ("users", "targets", "accounts", "members"):
+        v = args.get(k)
+        if isinstance(v, (list, tuple, set)) and len(v) > 1:
+            return False
+    return _FANOUT_RE.search(ticket.body or "") is None
+
+
 PRECHECKS: dict[str, Callable[[Ticket, dict, MockSystems], bool]] = {
     "authorized": _authorized,
     "risk_signals_clear": _risk_signals_clear,
     "minutes_le_60": _minutes_le_60,
+    "no_fan_out": _no_fan_out,
 }
 
 

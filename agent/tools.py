@@ -143,20 +143,20 @@ def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
         # --- GREEN actions --------------------------------------------------
         "okta.unlock_account": Tool(
             "okta.unlock_account", "GREEN*",
-            requires=["authorized", "risk_signals_clear"], self_target=True,
+            requires=["authorized", "risk_signals_clear", "no_fan_out"], self_target=True,
             idem=_unlock_key(s), verify=_v_unlocked,
             fn=s.okta_unlock_account),
         "okta.send_password_reset": Tool(
             "okta.send_password_reset", "GREEN",
-            requires=["authorized"], self_target=True,
+            requires=["authorized", "no_fan_out"], self_target=True,
             idem=_reset_key(s), verify=_v_reset_sent,
             fn=s.okta_send_password_reset),
         "okta.revoke_sessions": Tool(
-            "okta.revoke_sessions", "GREEN", self_target=True,
+            "okta.revoke_sessions", "GREEN", self_target=True, requires=["no_fan_out"],
             idem=_revoke_key, verify=_v_sessions_revoked,
             fn=s.okta_revoke_sessions),
         "okta.force_password_reset": Tool(
-            "okta.force_password_reset", "GREEN", self_target=True,
+            "okta.force_password_reset", "GREEN", self_target=True, requires=["no_fan_out"],
             idem=_revoke_key,   # user + incident, same recipe
             fn=s.okta_force_password_reset),
         "servicenow.create_request": Tool(
@@ -165,7 +165,7 @@ def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
             fn=s.servicenow_create_request),
         "endpoint.grant_admin": Tool(
             "endpoint.grant_admin", "GREEN",
-            requires=["authorized", "minutes_le_60"], self_target=True,
+            requires=["authorized", "minutes_le_60", "no_fan_out"], self_target=True,
             idem=_admin_key, verify=_v_admin_granted,
             fn=s.endpoint_grant_admin),
         "assetmgmt.create_case": Tool(

@@ -66,7 +66,19 @@ class AuditRecord(BaseModel):
 
     def log_line(self) -> str:
         cites = ",".join(c.cite() for c in self.citations) or "-"
-        tools = ",".join(f"{t.tool}({'ok' if t.verified else 'UNVERIFIED'})"
-                         for t in self.tool_results) or "-"
+        tools = " ; ".join(fmt_tool_call(t) for t in self.tool_results) or "-"
         return (f"{self.ticket_id} | {self.disposition} | cites={cites} | "
-                f"tools={tools} | outcome={self.outcome} | unsafe={self.unsafe_action_count}")
+                f"tools=[{tools}] | outcome={self.outcome} | unsafe={self.unsafe_action_count}")
+
+
+def fmt_args(args: dict[str, Any]) -> str:
+    return " ".join(f"{k}={v}" for k, v in args.items())
+
+
+def fmt_tool_call(t: ToolResult) -> str:
+    """One tool call with its arguments (brief §1.2 - the log records the tool
+    call AND its arguments), plus the verify result."""
+    flag = "ok" if t.verified else "UNVERIFIED"
+    if t.idempotent_replay:
+        flag += ",replay"
+    return f"{t.tool}({fmt_args(t.args)})[{flag}]"

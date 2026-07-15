@@ -9,7 +9,7 @@ import csv
 import json
 from pathlib import Path
 
-from agent.models import AuditRecord
+from agent.models import AuditRecord, fmt_tool_call
 
 
 def report_row(example: dict, rec: AuditRecord) -> dict:
@@ -20,8 +20,7 @@ def report_row(example: dict, rec: AuditRecord) -> dict:
         "expected": example.get("expected", ""),
         "predicted": rec.disposition,
         "match": "Y" if match else "N",
-        "tool_calls": ";".join(f"{t.tool}({'ok' if t.verified else 'UNVERIFIED'})"
-                               for t in rec.tool_results) or "-",
+        "tool_calls": " ; ".join(fmt_tool_call(t) for t in rec.tool_results) or "-",
         "citations": ",".join(c.cite() for c in rec.citations) or "-",
         "outcome": rec.outcome,
         "unsafe_actions": rec.unsafe_action_count,

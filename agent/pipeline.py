@@ -70,12 +70,21 @@ class Agent:
 
     # ------------------------------------------------------- grounding gate
     def _enforce_grounding(self, decision: Decision) -> Decision:
-        if decision.disposition in _REQUIRE_CITATION and not decision.citations:
+        # A citation only counts if the cited section actually exists in the
+        # corpus. This closes the "citing a non-existent policy" case (§6.6):
+        # a hallucinated section is dropped, and an answer/action with no valid
+        # citation left is downgraded to DEFER.
+        valid = [c for c in decision.citations
+                 if self.retriever.get(c.policy_id, c.section) is not None]
+        if decision.disposition in _REQUIRE_CITATION and not valid:
             return Decision(
                 disposition="DEFER_HUMAN",
-                reasoning=("no policy grounding for the proposed "
-                           f"{decision.disposition}; routing to a human"),
+                reasoning=(f"no valid policy grounding for the proposed "
+                           f"{decision.disposition} (cited section not found); "
+                           f"routing to a human"),
             )
+        if len(valid) != len(decision.citations):
+            return decision.model_copy(update={"citations": valid})
         return decision
 
     # ------------------------------------------------------- safety accounting

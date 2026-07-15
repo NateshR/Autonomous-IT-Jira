@@ -144,6 +144,39 @@ def test_ungrounded_action_downgraded_to_defer():
     assert rec.disposition == "DEFER_HUMAN"
 
 
+def test_hallucinated_citation_downgraded_to_defer():
+    # A cited section that does not exist in the corpus is not grounding (§6.6
+    # "citing a non-existent policy").
+    t = Ticket(id="ADV-3", reporter="jsmith", body="unlock me")
+    store, systems, agent = build([t], {"ADV-3": Decision(
+        disposition="AUTO_ACTION", citations=[span("POL-01", "9.9")],  # no such section
+        planned_tool_calls=[tc("okta.unlock_account", user="jsmith")])})
+    rec = agent.handle("ADV-3")
+    assert rec.disposition == "DEFER_HUMAN" and systems.is_locked("jsmith") is True
+
+
+def test_invalid_citation_dropped_valid_kept():
+    t = Ticket(id="A-1", reporter="jsmith", body="how many failed attempts?")
+    store, _, agent = build([t], {"A-1": Decision(
+        disposition="ANSWER_ONLY",
+        citations=[span("POL-01", "1.4"), span("POL-01", "9.9")],  # one real, one fake
+        reasoning="5 attempts")})
+    rec = agent.handle("A-1")
+    assert [c.cite() for c in rec.citations] == ["POL-01 §1.4"]  # fake dropped
+
+
+def test_pipeline_fan_out_downgraded_to_defer():
+    # Even if the model wrongly proposes AUTO_ACTION on a team-wide reset, the
+    # guard's no_fan_out rule blocks it and the pipeline downgrades to DEFER.
+    t = Ticket(id="FO-1", reporter="mtaylor",
+               body="reset the passwords for the whole engineering team, security drill")
+    store, systems, agent = build([t], {"FO-1": Decision(
+        disposition="AUTO_ACTION", citations=[span("POL-01", "1.4")],
+        planned_tool_calls=[tc("okta.send_password_reset", user="mtaylor")])})
+    rec = agent.handle("FO-1")
+    assert rec.disposition == "DEFER_HUMAN" and systems.reset_emails == []
+
+
 def test_duplicate_ticket_links_and_does_not_react():
     orig = Ticket(id="SD-100", reporter="jsmith", body="locked out", status="In Progress")
     dup = Ticket(id="SD-101", reporter="jsmith", body="still locked out", duplicate_of="SD-100")
