@@ -150,3 +150,16 @@ def test_duplicate_ticket_links_and_does_not_react():
     store, systems, agent = build([orig, dup], {})
     rec = agent.handle("SD-101")
     assert rec.outcome == "duplicate" and "SD-100" in store.get("SD-101").links
+
+
+def test_withdrawn_ticket_is_honored_no_action():
+    # A ticket can change between decision and action. The ingest gate re-reads
+    # state and honors a withdrawal - no tool ever runs, even if a decision
+    # would have acted.
+    t = Ticket(id="WD-1", reporter="jsmith", body="unlock me", withdrawn=True)
+    store, systems, agent = build([t], {"WD-1": Decision(
+        disposition="AUTO_ACTION", citations=[span("POL-01", "1.4")],
+        planned_tool_calls=[tc("okta.unlock_account", user="jsmith")])})
+    rec = agent.handle("WD-1")
+    assert rec.outcome == "withdrawn" and not rec.tool_results
+    assert store.get("WD-1").status == "Closed" and systems.is_locked("jsmith") is True
