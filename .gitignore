@@ -10,13 +10,5 @@ venv/
 *.egg-info/
 .pytest_cache/
 
-# Generated eval artifacts
-eval/report.csv
-eval/*.json.out
-
 # OS
 .DS_Store
-
-# generated eval artifacts
-eval/trace.json
-eval/adv/
