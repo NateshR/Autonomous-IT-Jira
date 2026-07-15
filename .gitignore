@@ -19,3 +19,4 @@ eval/*.json.out
 
 # generated eval artifacts
 eval/trace.json
+eval/adv/
