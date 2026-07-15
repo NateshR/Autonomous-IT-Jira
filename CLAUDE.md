@@ -55,7 +55,3 @@ Keep the mock small (in-memory dicts). It must implement: idempotency keys; two 
 
 - No em dashes in any written output (prose, docs, comments). Use a hyphen, or a spaced hyphen for a parenthetical break.
 - Keep secrets out of the repo.
-
-## Working practice
-
-- **Update `DESIGN_LOG.md` at the end of every phase, automatically.** When a build phase (see BUILD_PLAN.md) is completed, append its section to `DESIGN_LOG.md` - what was built, why it is shaped that way, and the review questions it answers - and commit it together with that phase's code. The user should not have to ask. `DESIGN_LOG.md` is the plain-language, defend-in-review record of every decision; keep it current.
