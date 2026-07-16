@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 
 from agent.config import SETTINGS
+from agent.constants import POLICY_DIR
 from agent.llm import build_llm
 from agent.pipeline import Agent
 from agent.retriever import Retriever
@@ -38,7 +39,7 @@ def run(ticket: Ticket, provider: str, model: str, expected: str | None):
     ensure_user(systems, ticket.reporter)
     store = MockTicketStore()
     store.add(ticket)
-    retriever = Retriever.from_dir("policies")
+    retriever = Retriever.from_dir(POLICY_DIR)
     agent = Agent(store, systems, retriever, build_llm(provider, model))
 
     print(BAR)

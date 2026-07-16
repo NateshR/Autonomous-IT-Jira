@@ -41,6 +41,11 @@ class Tool:
     # reporter. Safe: these tools act on the requester's own account, so the
     # target can only ever be the requester (never someone else).
     self_target: bool = False
+    # Display-only: used to render the tool catalog into the decider prompt, so
+    # the model's menu is generated from this registry rather than hand-copied
+    # (one source of truth - onboarding tool #11 really is one row).
+    signature: str = ""     # e.g. "user, minutes"
+    hint: str = ""          # e.g. "minutes <= 60"
 
 
 # --------------------------------------------------------------- idem recipes
@@ -131,67 +136,85 @@ def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
         # Tolerant of missing/aliased args so a read check never crashes a run.
         "directory.lookup_user": Tool(
             "directory.lookup_user", "GREEN", read_only=True, self_target=True,
+            signature="user", hint="read",
             fn=lambda **kw: s.lookup_user(kw.get("user"))),
         "directory.verify_manager": Tool(
             "directory.verify_manager", "GREEN", read_only=True,
+            signature="manager, subordinate", hint="read - verifies a claimed manager",
             fn=lambda **kw: s.verify_manager(kw.get("manager"), kw.get("subordinate"))),
         "okta.risk_signals": Tool(
             "okta.risk_signals", "GREEN", read_only=True, self_target=True,
+            signature="user", hint="read - CHECK BEFORE ANY UNLOCK",
             fn=lambda **kw: s.okta_risk_signals(kw.get("user"))),
         "iam.get_approval": Tool(
             "iam.get_approval", "GREEN", read_only=True,
+            signature="approval_id", hint="read - rebuts an 'already approved' claim",
             fn=lambda **kw: s.iam_get_approval(kw.get("approval_id"))),
 
         # --- GREEN actions --------------------------------------------------
         "okta.unlock_account": Tool(
             "okta.unlock_account", "GREEN*",
+            signature="user", hint="only if risk signals are clear",
             requires=["authorized", "risk_signals_clear", "no_fan_out"], self_target=True,
             idem=_unlock_key(s), verify=_v_unlocked,
             fn=s.okta_unlock_account),
         "okta.send_password_reset": Tool(
             "okta.send_password_reset", "GREEN",
+            signature="user", hint="verified owner only",
             requires=["authorized", "no_fan_out"], self_target=True,
             idem=_reset_key(s), verify=_v_reset_sent,
             fn=s.okta_send_password_reset),
         "okta.revoke_sessions": Tool(
             "okta.revoke_sessions", "GREEN", self_target=True, requires=["no_fan_out"],
+            signature="user", hint="containment",
             idem=_revoke_key, verify=_v_sessions_revoked,
             fn=s.okta_revoke_sessions),
         "okta.force_password_reset": Tool(
             "okta.force_password_reset", "GREEN", self_target=True, requires=["no_fan_out"],
+            signature="user", hint="containment",
             idem=_revoke_key,   # user + incident, same recipe
             fn=s.okta_force_password_reset),
         "servicenow.create_request": Tool(
             "servicenow.create_request", "GREEN",
+            signature="item, fields", hint="files the request, does not grant it",
             idem=_request_key(s), verify=_v_request_filed,
             fn=s.servicenow_create_request),
         "endpoint.grant_admin": Tool(
             "endpoint.grant_admin", "GREEN",
+            signature="user, minutes", hint="minutes <= 60",
             requires=["authorized", "minutes_le_60", "no_fan_out"], self_target=True,
             idem=_admin_key, verify=_v_admin_granted,
             fn=s.endpoint_grant_admin),
         "assetmgmt.create_case": Tool(
             "assetmgmt.create_case", "GREEN",
+            signature="case_type, fields", hint="lost/stolen or offboarding case",
             idem=_case_key, verify=_v_case_registered,
             fn=s.assetmgmt_create_case),
         "iam.create_approval": Tool(
             "iam.create_approval", "GREEN",
+            signature="action, approvers", hint="routing is GREEN; the granting is not",
             idem=_approval_key, verify=_v_approval_routed,
             fn=s.iam_create_approval),
 
         # --- AMBER (never inline; only draftable into create_approval) ------
         "iam.grant_access": Tool(
-            "iam.grant_access", "AMBER", fn=s.iam_grant_access),
+            "iam.grant_access", "AMBER", signature="user, system, role",
+            hint="NEVER call inline - draft it into iam.create_approval",
+            fn=s.iam_grant_access),
         "okta.disable_mfa": Tool(
-            "okta.disable_mfa", "AMBER", fn=s.okta_disable_mfa),
+            "okta.disable_mfa", "AMBER", signature="user",
+            hint="NEVER call inline - draft it into iam.create_approval",
+            fn=s.okta_disable_mfa),
 
         # --- RED (escalation only) ------------------------------------------
         "soc.open_incident": Tool(
             "soc.open_incident", "RED",
+            signature="sev, summary", hint="escalation only",
             idem=_incident_key, verify=_v_incident_open,
             fn=s.soc_open_incident),
         "soc.page_oncall": Tool(
             "soc.page_oncall", "RED",
+            signature="team", hint="escalation only",
             idem=_incident_key,
             fn=s.soc_page_oncall),
     }

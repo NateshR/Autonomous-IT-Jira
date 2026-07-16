@@ -12,13 +12,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from agent.constants import Status
+
 
 @dataclass
 class Ticket:
     id: str
     reporter: str                 # established by login on a real Service Desk
     body: str
-    status: str = "Open"
+    status: str = Status.OPEN
     labels: list[str] = field(default_factory=list)
     comments: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)

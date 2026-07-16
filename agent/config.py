@@ -21,8 +21,8 @@ class Settings:
         "LLM_PROVIDER",
         "anthropic" if os.getenv("ANTHROPIC_API_KEY") else "stub",
     )
+    # Retrieval tuning. Read by Agent - this is the only place to change them.
     retrieval_top_k: int = 4
-    # below this overlap score, retrieval is treated as "no grounding" -> DEFER
     retrieval_min_score: float = 1.0
 
 

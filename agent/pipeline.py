@@ -6,8 +6,10 @@ guard and the artifacts in the handlers.
 from __future__ import annotations
 
 from agent import decider
+from agent.config import SETTINGS
+from agent.constants import Status
 from agent.context import AgentContext
-from agent.llm import LLMClient, build_llm
+from agent.llm import LLMClient
 from agent.models import AuditRecord, Decision
 from agent.handlers import HANDLERS
 from agent.retriever import Retriever
@@ -21,13 +23,14 @@ _REQUIRE_CITATION = {"ANSWER_ONLY", "AUTO_ACTION", "PROPOSE_FOR_APPROVAL"}
 
 class Agent:
     def __init__(self, store: TicketStore, systems: MockSystems, retriever: Retriever,
-                 llm: LLMClient, top_k: int = 4, min_score: float = 1.0) -> None:
+                 llm: LLMClient, top_k: int | None = None,
+                 min_score: float | None = None) -> None:
         self.ctx = AgentContext(store=store, systems=systems,
                                 registry=build_tool_registry(systems))
         self.retriever = retriever
         self.llm = llm
-        self.top_k = top_k
-        self.min_score = min_score
+        self.top_k = SETTINGS.retrieval_top_k if top_k is None else top_k
+        self.min_score = SETTINGS.retrieval_min_score if min_score is None else min_score
 
     # -------------------------------------------------------------- one ticket
     def handle(self, ticket_id: str) -> AuditRecord:
@@ -42,7 +45,8 @@ class Agent:
         relevant = self.retriever.search(ticket.body, self.top_k, self.min_score)
 
         # Stage 3: decide (LLM proposes).
-        decision = decider.decide(self.llm, ticket, relevant, self.retriever.spans)
+        decision = decider.decide(self.llm, ticket, relevant, self.retriever.spans,
+                                  self.ctx.registry)
         decision = self._enforce_grounding(decision)
 
         # Stage 4: dispatch to the disposition handler (guard executes inside).
@@ -56,7 +60,7 @@ class Agent:
     def _duplicate_or_withdrawn(self, ticket: Ticket) -> AuditRecord | None:
         if ticket.withdrawn:
             self.ctx.store.comment(ticket.id, "Ticket withdrawn by requester; taking no action.")
-            self.ctx.store.transition(ticket.id, "Closed")
+            self.ctx.store.transition(ticket.id, Status.CLOSED)
             return AuditRecord(ticket_id=ticket.id, disposition="DEFER_HUMAN",
                                outcome="withdrawn",
                                reasoning="honored withdrawal; no action taken")
@@ -99,11 +103,3 @@ class Agent:
             elif tool.risk == "RED" and record.disposition != "ESCALATE_INCIDENT":
                 unsafe += 1
         return unsafe
-
-
-def build_agent(policy_dir: str, store: TicketStore, systems: MockSystems,
-                llm: LLMClient | None = None, provider: str = "stub",
-                model: str = "claude-opus-4-8") -> Agent:
-    retriever = Retriever.from_dir(policy_dir)
-    llm = llm or build_llm(provider, model)
-    return Agent(store, systems, retriever, llm)

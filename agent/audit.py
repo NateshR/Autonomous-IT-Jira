@@ -40,9 +40,3 @@ def write_report_csv(rows: list[dict], path: str | Path) -> None:
 def write_trace_json(records: list[AuditRecord], path: str | Path) -> None:
     payload = [r.model_dump() for r in records]
     Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def print_decision_log(records: list[AuditRecord]) -> None:
-    print("DECISION LOG")
-    for r in records:
-        print("  " + r.log_line())

@@ -7,6 +7,7 @@ property of the guard + mock idempotency ledger, not of the model.
 
 from __future__ import annotations
 
+from agent.constants import POLICY_DIR
 from agent.llm import StubLLM
 from agent.models import Decision, PlannedToolCall, PolicySpan
 from agent.pipeline import Agent
@@ -38,7 +39,7 @@ def main() -> None:
     store.add(Ticket(id="ACT-2", reporter="jsmith", body="still locked out, please unlock"))
 
     table = {"ACT-1": _unlock_decision(), "ACT-2": _unlock_decision()}
-    agent = Agent(store, systems, Retriever.from_dir("policies"), StubLLM(table))
+    agent = Agent(store, systems, Retriever.from_dir(POLICY_DIR), StubLLM(table))
 
     print(BAR)
     print("Account jsmith locked:", systems.is_locked("jsmith"), "(lock_epoch",

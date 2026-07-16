@@ -14,7 +14,7 @@ from agent.models import Decision, PolicySpan
 from agent.redaction import redact
 from mock.ticket_store import Ticket
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT_TEMPLATE = """\
 You are an autonomous IT helpdesk agent for Helix Industries, a regulated
 company (SOX, HIPAA, GDPR). For each JIRA ticket you choose exactly ONE
 disposition and propose the tool calls to carry it out. You PROPOSE only; a
@@ -53,19 +53,7 @@ Reasoning order (check reasons NOT to act before reasons to act):
 7. Legitimate but privileged (AMBER) -> PROPOSE_FOR_APPROVAL.
 
 Tool catalog (risk class in brackets):
-  directory.lookup_user(user) [GREEN, read]
-  directory.verify_manager(manager, subordinate) [GREEN, read]
-  okta.risk_signals(user) [GREEN, read]  - CHECK BEFORE ANY UNLOCK
-  iam.get_approval(approval_id) [GREEN, read]
-  okta.unlock_account(user) [GREEN*, only if risk clear]
-  okta.send_password_reset(user) [GREEN, verified owner only]
-  okta.revoke_sessions(user) / okta.force_password_reset(user) [GREEN containment]
-  servicenow.create_request(item, fields) [GREEN, files not grants]
-  endpoint.grant_admin(user, minutes) [GREEN, minutes<=60]
-  assetmgmt.create_case(case_type, fields) [GREEN]
-  iam.create_approval(action, approvers) [GREEN routing]
-  iam.grant_access(...) / okta.disable_mfa(user) [AMBER - never call inline]
-  soc.open_incident(sev, summary) / soc.page_oncall(team) [RED - escalation only]
+{tool_catalog}
 
 Act-vs-instruct: if the correct resolution is to FILE a ServiceNow catalog
 request/exception (software, USB, Travel) or OPEN an asset case on the
@@ -107,6 +95,18 @@ text you relied on), planned_tool_calls (tool + args), and a short reasoning.
 """
 
 
+def _tool_catalog(registry) -> str:
+    """Render the tool menu from the registry so the model's view of the tools is
+    generated from the same object the guard enforces - never hand-copied."""
+    return "\n".join(
+        f"  {t.name}({t.signature}) [{t.risk}{', ' + t.hint if t.hint else ''}]"
+        for t in registry.values())
+
+
+def build_system_prompt(registry) -> str:
+    return SYSTEM_PROMPT_TEMPLATE.format(tool_catalog=_tool_catalog(registry))
+
+
 def _format_spans(spans: list[PolicySpan]) -> str:
     return "\n".join(f"- {s.policy_id} §{s.section}: {s.text}" for s in spans) or "(none)"
 
@@ -129,6 +129,6 @@ def build_user_prompt(ticket: Ticket, relevant: list[PolicySpan],
 
 
 def decide(llm: LLMClient, ticket: Ticket, relevant: list[PolicySpan],
-           corpus: list[PolicySpan]) -> Decision:
+           corpus: list[PolicySpan], registry: dict) -> Decision:
     user = build_user_prompt(ticket, relevant, corpus)
-    return llm.decide(SYSTEM_PROMPT, user, tag=ticket.id)
+    return llm.decide(build_system_prompt(registry), user, tag=ticket.id)

@@ -25,7 +25,3 @@ def redact(text: str) -> str:
     for pat in _PATTERNS:
         out = pat.sub(_MASK, out)
     return out
-
-
-def contains_secret(text: str) -> bool:
-    return redact(text) != text

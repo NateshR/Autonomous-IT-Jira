@@ -7,6 +7,7 @@ comment/transition.
 
 from __future__ import annotations
 
+from agent.constants import Status
 from agent.context import AgentContext
 from agent.guard import PartialFailure, ToolInvocationError, Unsafe, guarded_execute
 from agent.models import AuditRecord, Decision, PlannedToolCall, ToolResult
@@ -14,7 +15,7 @@ from agent.redaction import redact
 from mock.systems import Step2Failure
 from mock.ticket_store import Ticket
 
-_ACTION_TOOLS_THAT_MUTATE = {"okta.disable_mfa", "iam.grant_access"}  # AMBER
+_ROLLED_BACK = ("Action partially failed and was rolled back; flagged for a human.")
 
 
 def _base_record(ticket: Ticket, decision: Decision) -> AuditRecord:
@@ -30,11 +31,41 @@ def _cites(decision: Decision) -> str:
     return ", ".join(c.cite() for c in decision.citations) or "policy"
 
 
+
+def _run_chain(decision: Decision, ticket: Ticket, ctx: AgentContext,
+               in_escalation: bool = False) -> list[ToolResult]:
+    """Run the proposed tool calls through the guard, in order, verifying each.
+    Shared by AUTO_ACTION and ESCALATE - the only two handlers that mutate state.
+    Raises Unsafe / ToolInvocationError / Step2Failure / PartialFailure upward so
+    each handler can apply its own policy for what to do about it."""
+    completed: list[ToolResult] = []
+    for call in decision.planned_tool_calls:
+        r = guarded_execute(call, ticket, ctx.registry, ctx.systems,
+                            in_escalation=in_escalation)
+        if not r.verified:
+            raise PartialFailure(f"{call.tool} did not verify", completed)
+        completed.append(r)
+    return completed
+
+
+def _fail(rec: AuditRecord, ticket: Ticket, ctx: AgentContext, *, note: str,
+          comment: str, status: str, outcome: str,
+          results: list[ToolResult] | None = None) -> AuditRecord:
+    """Record a non-success outcome consistently: keep what completed, note why,
+    tell the requester, move the ticket, and never claim success."""
+    rec.tool_results = results or []
+    rec.notes.append(note)
+    ctx.store.comment(ticket.id, comment)
+    ctx.store.transition(ticket.id, status)
+    rec.outcome = outcome
+    return rec
+
+
 # --------------------------------------------------------------- ANSWER_ONLY
 def answer_only(ticket: Ticket, decision: Decision, ctx: AgentContext) -> AuditRecord:
     rec = _base_record(ticket, decision)
     ctx.store.comment(ticket.id, f"{redact(decision.reasoning)} (per {_cites(decision)})")
-    ctx.store.transition(ticket.id, "Closed")
+    ctx.store.transition(ticket.id, Status.CLOSED)
     rec.outcome = "closed"
     return rec
 
@@ -42,44 +73,29 @@ def answer_only(ticket: Ticket, decision: Decision, ctx: AgentContext) -> AuditR
 # ---------------------------------------------------------------- AUTO_ACTION
 def auto_action(ticket: Ticket, decision: Decision, ctx: AgentContext) -> AuditRecord:
     rec = _base_record(ticket, decision)
-    completed: list[ToolResult] = []
     try:
-        for call in decision.planned_tool_calls:
-            r = guarded_execute(call, ticket, ctx.registry, ctx.systems)
-            if not r.verified:
-                raise PartialFailure(f"{call.tool} did not verify", completed)
-            completed.append(r)
+        completed = _run_chain(decision, ticket, ctx)
     except (Unsafe, ToolInvocationError) as e:
-        # The guard blocked or could not run a proposed action. The safe response is to NOT act
-        # and route to a human - never force it through.
-        rec.tool_results = completed
-        rec.notes.append(f"guard blocked: {e}")
-        ctx.store.comment(ticket.id, "Could not complete this safely; routing to the Service Desk.")
-        ctx.store.transition(ticket.id, "Deferred")
-        rec.outcome = "deferred"
+        # The guard blocked or could not run a proposed action. The safe response
+        # is to NOT act and route to a human - never force it through.
         rec.disposition = "DEFER_HUMAN"
-        return rec
+        return _fail(rec, ticket, ctx, note=f"guard blocked: {e}",
+                     comment="Could not complete this safely; routing to the Service Desk.",
+                     status=Status.DEFERRED, outcome="deferred")
     except Step2Failure as e:
         ctx.systems.delete_case(e.rollback_id)   # undo the committed step-1 partial
-        _rollback(completed, ctx)
-        rec.tool_results = completed
-        rec.notes.append(f"multi-step failure, rolled back step 1 ({e.rollback_id}): {e}")
-        ctx.store.comment(ticket.id, "Action partially failed and was rolled back; flagged for a human.")
-        ctx.store.transition(ticket.id, "Deferred")
-        rec.outcome = "rolled_back"
-        return rec
+        return _fail(rec, ticket, ctx,
+                     note=f"multi-step failure, rolled back step 1 ({e.rollback_id}): {e}",
+                     comment=_ROLLED_BACK, status=Status.DEFERRED, outcome="rolled_back")
     except PartialFailure as e:
         _rollback(e.completed, ctx)
-        rec.tool_results = e.completed
-        rec.notes.append(f"partial failure, rolled back/flagged: {e}")
-        ctx.store.comment(ticket.id, "Action partially failed and was rolled back; flagged for a human.")
-        ctx.store.transition(ticket.id, "Deferred")
-        rec.outcome = "rolled_back"
-        return rec
+        return _fail(rec, ticket, ctx, note=f"partial failure, rolled back/flagged: {e}",
+                     comment=_ROLLED_BACK, status=Status.DEFERRED, outcome="rolled_back",
+                     results=e.completed)
 
     rec.tool_results = completed
     ctx.store.comment(ticket.id, f"Done: {redact(decision.reasoning)} (per {_cites(decision)})")
-    ctx.store.transition(ticket.id, "Closed")
+    ctx.store.transition(ticket.id, Status.CLOSED)
     rec.outcome = "closed"
     return rec
 
@@ -105,11 +121,11 @@ def propose_for_approval(ticket: Ticket, decision: Decision, ctx: AgentContext) 
             f"This is a privileged action and cannot be executed automatically. "
             f"Routed for approval ({aid}) per {_cites(decision)}. This ticket stays pending.",
         )
-        ctx.store.transition(ticket.id, "Waiting for Approval")
+        ctx.store.transition(ticket.id, Status.WAITING_APPROVAL)
         rec.outcome = "pending"
     else:
         ctx.store.comment(ticket.id, "Privileged request could not be routed; escalating to a human.")
-        ctx.store.transition(ticket.id, "Deferred")
+        ctx.store.transition(ticket.id, Status.DEFERRED)
         rec.outcome = "deferred"
     return rec
 
@@ -117,21 +133,14 @@ def propose_for_approval(ticket: Ticket, decision: Decision, ctx: AgentContext) 
 # ------------------------------------------------------------ ESCALATE_INCIDENT
 def escalate_incident(ticket: Ticket, decision: Decision, ctx: AgentContext) -> AuditRecord:
     rec = _base_record(ticket, decision)
-    completed: list[ToolResult] = []
     try:
-        for call in decision.planned_tool_calls:
-            r = guarded_execute(call, ticket, ctx.registry, ctx.systems, in_escalation=True)
-            if not r.verified:
-                raise PartialFailure(f"{call.tool} did not verify", completed)
-            completed.append(r)
+        completed = _run_chain(decision, ticket, ctx, in_escalation=True)
     except (Unsafe, PartialFailure, Step2Failure, ToolInvocationError) as e:
-        _rollback(completed, ctx)
-        rec.tool_results = completed
-        rec.notes.append(f"containment partial/blocked, flagged: {e}")
-        ctx.store.comment(ticket.id, "Security incident raised; some containment steps failed and were flagged for SOC.")
-        ctx.store.transition(ticket.id, "Escalated")
-        rec.outcome = "escalated"
-        return rec
+        _rollback(getattr(e, "completed", []), ctx)
+        return _fail(rec, ticket, ctx, note=f"containment partial/blocked, flagged: {e}",
+                     comment="Security incident raised; some containment steps failed "
+                             "and were flagged for SOC.",
+                     status=Status.ESCALATED, outcome="escalated")
 
     rec.tool_results = completed
     # POL-09 §9.2 containment instruction to the user; never close a RED ticket.
@@ -142,7 +151,7 @@ def escalate_incident(ticket: Ticket, decision: Decision, ctx: AgentContext) -> 
         "any prompts. Per POL-09 §9.2, disconnect from the network (unplug Ethernet, disable "
         "Wi-Fi), do NOT power off, and await SOC instructions.",
     )
-    ctx.store.transition(ticket.id, "Escalated")
+    ctx.store.transition(ticket.id, Status.ESCALATED)
     rec.outcome = "escalated"
     return rec
 
@@ -152,7 +161,7 @@ def ask_clarification(ticket: Ticket, decision: Decision, ctx: AgentContext) -> 
     rec = _base_record(ticket, decision)
     question = redact(decision.reasoning) or "Could you share more detail so we can help safely?"
     ctx.store.comment(ticket.id, question)
-    ctx.store.transition(ticket.id, "Waiting for Customer")
+    ctx.store.transition(ticket.id, Status.WAITING_CUSTOMER)
     ctx.store.add_label(ticket.id, "needs-clarification")
     rec.outcome = "waiting"
     return rec
@@ -180,7 +189,7 @@ def defer_human(ticket: Ticket, decision: Decision, ctx: AgentContext) -> AuditR
     queue = _route_queue(decision.reasoning)
     ctx.store.comment(ticket.id, f"Routing to {queue}: {redact(decision.reasoning)}")
     ctx.store.add_label(ticket.id, f"queue:{queue.lower().replace(' ', '-')}")
-    ctx.store.transition(ticket.id, "Deferred")
+    ctx.store.transition(ticket.id, Status.DEFERRED)
     rec.outcome = f"deferred->{queue}"
     return rec
 

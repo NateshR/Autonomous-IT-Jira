@@ -21,6 +21,7 @@ from pathlib import Path
 
 from agent.audit import report_row, write_report_csv, write_trace_json
 from agent.config import SETTINGS
+from agent.constants import POLICY_DIR
 from agent.llm import build_llm
 from agent.pipeline import Agent
 from agent.retriever import Retriever
@@ -34,7 +35,7 @@ ABBREV = {d: d.split("_")[0][:4].upper() for d in DISPOSITIONS}
 
 def run(examples_path: str, provider: str, model: str, out_dir: str):
     examples = json.loads(Path(examples_path).read_text(encoding="utf-8"))
-    retriever = Retriever.from_dir("policies")
+    retriever = Retriever.from_dir(POLICY_DIR)
     llm = build_llm(provider, model)
 
     records, rows = [], []
