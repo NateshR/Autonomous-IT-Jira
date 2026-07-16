@@ -111,7 +111,7 @@ flowchart TD
     C -- yes --> C1[comment + close, no action] --> Z[return AuditRecord]
     C -- no --> D{duplicate_of set?}
     D -- yes --> D1[link to original + comment, no action] --> Z
-    D -- no --> E[RETRIEVE: rank spans; full corpus also passed]
+    D -- no --> E[RETRIEVE - rank spans, full corpus also passed]
     E --> F[DECIDE: LLM returns a Decision proposal]
     F --> G[GROUNDING GATE: drop invalid citations]
     G --> H{acting/answering with no valid citation?}
@@ -160,7 +160,7 @@ flowchart TD
     H -- yes --> X4[re-raise - handler rolls back]
     H -- no --> I[VERIFY: re-read state]
     I --> J[return ToolResult with verified flag]
-    X1 --> Y[handler catches -> DEFER/flag; nothing ran]
+    X1 --> Y[handler catches, downgrades to DEFER or flags, nothing ran]
     X2 --> Y
     X3 --> Y
 ```
@@ -204,12 +204,12 @@ flowchart LR
     D --> E[ESCALATE_INCIDENT]
     D --> F[ASK_CLARIFICATION]
     D --> G[DEFER_HUMAN]
-    A --> A1[cited comment + close; no mutation]
-    B --> B1[guarded GREEN chain -> verify -> comment+cite+close<br/>Unsafe -> DEFER; Step2Failure -> rollback]
-    C --> C1[iam.create_approval routing + pending;<br/>AMBER grant refused inline]
-    E --> E1[open incident + page + GREEN containment<br/>+ POL-09 instruction; never close]
-    F --> F1[one question + Waiting for Customer + label]
-    G --> G1[reason + route to named queue]
+    A --> A1[cited comment then close, no mutation]
+    B --> B1[guarded GREEN chain then verify then comment cite close<br/>Unsafe downgrades to DEFER, Step2Failure rolls back]
+    C --> C1[iam.create_approval routing, leave pending<br/>AMBER grant refused inline]
+    E --> E1[open incident, page, GREEN containment<br/>plus POL-09 instruction, never close]
+    F --> F1[one question, Waiting for Customer, add label]
+    G --> G1[reason plus route to named queue]
 ```
 
 | Disposition | Handler | Key behavior |
@@ -234,20 +234,20 @@ sequenceDiagram
     participant G as guarded_execute
     participant S as mock.systems
 
-    P->>P: store.get(E-04); not dup/withdrawn
-    P->>R: search(body) -> [POL-01 §1.4]
-    P->>L: decide -> AUTO_ACTION + unlock plan
-    P->>P: grounding: POL-01 §1.4 exists -> ok
-    P->>H: HANDLERS[AUTO_ACTION]
-    H->>G: unlock(user=jsmith)
-    G->>G: risk gate GREEN* ok
-    G->>S: risk_signals(jsmith) -> clear (precondition ok)
-    G->>G: authorized ok; no_fan_out ok
-    G->>S: okta_unlock_account jsmith, key=jsmith:1001
-    S-->>G: status success; a.locked=False
-    G->>S: is_locked jsmith? False so verified=True
+    P->>P: read ticket E-04, not duplicate or withdrawn
+    P->>R: search body, returns POL-01 1.4
+    P->>L: decide, returns AUTO_ACTION plus unlock plan
+    P->>P: grounding check, POL-01 1.4 exists, ok
+    P->>H: dispatch AUTO_ACTION handler
+    H->>G: unlock user jsmith
+    G->>G: risk gate GREEN, pass
+    G->>S: risk_signals jsmith, returns clear
+    G->>G: authorized pass, no_fan_out pass
+    G->>S: unlock jsmith with key jsmith-1001
+    S-->>G: status success, account now unlocked
+    G->>S: is_locked jsmith, returns False so verified true
     G-->>H: ToolResult verified
-    H->>P: comment "Done (POL-01 §1.4)" + Close
+    H->>P: comment Done cite POL-01 1.4, then Close
     P->>P: unsafe_action_count = 0
 ```
 
