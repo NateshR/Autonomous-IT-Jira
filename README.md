@@ -162,5 +162,6 @@ Known seeded usernames (for authz in test tickets): `jsmith`, `mtaylor`,
 ## Notes
 
 Privileged systems are always mocked - never point an agent at real Okta or
-production IAM. Secrets stay out of the repo (`.env` is gitignored). NOTES.md is
-the captured spec; BUILD_PLAN.md is the phased plan.
+production IAM. Secrets stay out of the repo (`.env` is gitignored).
+`LLD.md` is the low-level design (architecture, flowcharts, how the code works);
+`NOTES.md` is the captured spec; `BUILD_PLAN.md` is the phased plan.
