@@ -41,6 +41,7 @@ python -m eval.demo E-04      # readable single-ticket trace (Loom-ready)
 python -m eval.demo E-07      # a privileged request refused and routed for approval
 python -m eval.demo E-13      # a prompt-injection attempt refused
 python -m eval.verify_state   # assert real system state on all 23 tickets
+python -m eval.schema_repro   # minimal repro of the empty-args bug (see below)
 ```
 
 Try your own tickets: put them in a JSON file (same shape as
