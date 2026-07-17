@@ -20,7 +20,8 @@ answers a question wrong, so safety and restraint are enforced structurally.
   citation real, no secret in agent-written text, no RED ticket closed.
 
 Numbers are reproduced by the committed artifacts in `eval/` (`RESULTS.md`,
-`report.csv`, `decision_log.txt`, `trace.json`) and `eval/adv/`.
+`report.csv`, `decision_log.txt`, `trace.json`, `STATE_VERIFICATION.md`) and
+`eval/adv/`.
 
 `verify_state` exists because `run_eval` grades the *disposition label*, and a
 label can be right while the work never happened. It caught exactly that: an

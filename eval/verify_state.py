@@ -152,13 +152,18 @@ def check(ex, rec, sys_, store, corpus_cites):
     return f, n
 
 
-def main(path, out_label):
+def main(path, out_label, lines):
     examples = json.loads(Path(path).read_text())
     r = Retriever.from_dir(POLICY_DIR)
     corpus_cites = {s.cite() for s in r.spans}
     llm = build_llm(SETTINGS.provider, SETTINGS.model)
 
+    def emit(s: str) -> None:
+        print(s)
+        lines.append(s)
+
     total_fail = 0
+    emit(f"## {out_label}\n")
     for ex in examples:
         sys_ = seed_systems()
         ensure_user(sys_, ex["reporter"])
@@ -168,21 +173,43 @@ def main(path, out_label):
         fails, notes = check(ex, rec, sys_, store, corpus_cites)
         total_fail += len(fails)
         mark = "PASS" if not fails else "**FAIL**"
-        print(f"{mark:8} {ex['id']:<17} {rec.disposition:<21} "
-              f"status={store.get(ex['id']).status}")
+        emit(f"{mark:8} {ex['id']:<17} {rec.disposition:<21} "
+             f"status={store.get(ex['id']).status}")
         for n in notes:
-            print(f"           . {n}")
+            emit(f"           . {n}")
         for x in fails:
-            print(f"           X {x}")
-    print(f"\n{out_label}: {total_fail} state-level failure(s) across {len(examples)} tickets")
+            emit(f"           X {x}")
+    emit(f"\n{out_label}: {total_fail} state-level failure(s) across "
+         f"{len(examples)} tickets\n")
     return total_fail
 
 
 if __name__ == "__main__":
-    a = main("eval/worked_examples.json", "WORKED")
+    # Persist the result like every other eval artifact. A claim in the README
+    # with no committed evidence behind it is exactly the gap this file exists to
+    # close - so it must not reproduce that gap itself.
+    lines: list[str] = []
+    a = main("eval/worked_examples.json", "WORKED", lines)
     print()
-    b = main("eval/adversarial.json", "ADVERSARIAL")
+    b = main("eval/adversarial.json", "ADVERSARIAL", lines)
     total = a + b
     print(f"\nTOTAL STATE-LEVEL FAILURES: {total}")
+
+    Path("eval/STATE_VERIFICATION.md").write_text(
+        "# State-level verification\n\n"
+        "Asserts the real state of the mock systems after each ticket - not the\n"
+        "disposition label. `run_eval` grades the label, and a label can be right\n"
+        "while the work never happened: an approval never routed, an on-call never\n"
+        "paged. Both of those passed `run_eval` before this existed.\n\n"
+        "Every ticket is checked against the universal invariants (no AMBER ever\n"
+        "executed, no RED outside an escalation, every state change verified by\n"
+        "re-read and carrying an idempotency key, no unlock without a clear risk\n"
+        "check, every citation real, no secret in agent-written text), plus the\n"
+        "artifact its disposition must produce.\n\n"
+        "```\n" + "\n".join(lines) + "\n"
+        f"TOTAL STATE-LEVEL FAILURES: {total}\n```\n",
+        encoding="utf-8")
+    print("Wrote eval/STATE_VERIFICATION.md")
+
     if total:
         raise SystemExit(f"FAIL: {total} state-level failure(s)")
