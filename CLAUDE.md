@@ -32,6 +32,15 @@ These are load-bearing. A single violation can cap the whole submission. Preserv
 - **Idempotency.** Every state-changing tool call carries the documented idempotency key (see the tool table in NOTES.md §3) so retries/duplicates never double-act. Re-read ticket state immediately before executing to honor withdrawals.
 - **Never "resolve and close" a RED (security) ticket** with a policy snippet. Redact secrets found in ticket bodies; never echo them into a comment or log.
 
+## Regression traps (each of these shipped once and was invisible)
+
+Every one of these looked correct in the decision log while the work silently did not happen. `python -m eval.verify_state` is what catches them - it asserts real mock-system state rather than the disposition label. Run it, not just `run_eval`, after touching any of this.
+
+- **Never make `PlannedToolCall.args` a free-form `dict[str, Any]`.** It compiles to a JSON schema with `additionalProperties: true` and no declared properties, and the model then returns `{}` every time - regardless of prompt wording, field description, or being marked required (`{}` satisfies `required`). Every tool call arrived argument-less; tools taking only `user` still "worked" because the guard's `self_target` fallback filled it in. Keep the `list[Arg]` name/value shape. `python -m eval.schema_repro` demonstrates both in one call each.
+- **Two tools may share an idempotency-key RECIPE, never a ledger SLOT.** `revoke_sessions`/`force_password_reset` are both user+incident; `open_incident`/`page_oncall` are both the ticket id. The ledger is namespaced per endpoint (`mock/systems.py:_idempotent(ns=...)`). Without that, the second tool returns the first one's cached response and never runs - on-call was never paged while the ticket said it was.
+- **Redaction must keep the label and mask only the value** (`password is [REDACTED-SECRET]`, not `[REDACTED]`). Masking the label destroys the fact that a credential was disclosed, which is an ESCALATE_INCIDENT trigger - the agent went blind and asked for clarification instead. The secret value must still never reach the model, a comment, or a log.
+- **Every state-changing tool needs a `verify=`.** The two that lacked one are exactly where the silent failure hid. Only the AMBER tools may have none, because they are structurally unreachable.
+
 ## Intended architecture
 
 A five-stage pipeline, identical for every ticket:
@@ -44,13 +53,13 @@ INGEST (re-read ticket, detect dupes/withdrawals)
   -> RECORD (jira comment + citation, decision log, close/leave pending)
 ```
 
-Each of the six dispositions maps to its own handler that produces exactly its required artifact (see NOTES.md §4). AUTO_ACTION is the only handler that executes tools, so all safety checks concentrate there. PROPOSE_FOR_APPROVAL has no code path to the AMBER tool - it can only draft into `iam.create_approval`.
+Each of the six dispositions maps to its own handler that produces exactly its required artifact (see NOTES.md §4). Three handlers reach tools, and every one of them goes through the guard: AUTO_ACTION (GREEN actions), ESCALATE_INCIDENT (RED `soc.*` plus GREEN containment, via `in_escalation=True` - the only thing that permits RED), and PROPOSE_FOR_APPROVAL (only `iam.create_approval`; it has no code path to the AMBER tool itself). ANSWER_ONLY / ASK_CLARIFICATION / DEFER_HUMAN never mutate. Safety does not concentrate in a handler - it concentrates in `guarded_execute`.
 
-Planned module split (subject to change when the stack is chosen):
-- agent: pipeline loop, retriever, decider (LLM), guard, executor, disposition handlers, audit
-- mock: in-memory fake systems, the two deliberate failure modes, seed data
+Module split:
+- agent: pipeline loop, retriever, decider (LLM), guard, tool registry, disposition handlers, redaction, audit, constants
+- mock: in-memory fake systems, the two deliberate failure modes, seed data, ticket store (JIRA behind an adapter)
 - policies: POL-01 .. POL-10 knowledge base
-- eval: the 17 worked examples + the CSV report (predicted disposition + tool calls + citation + unsafe-action count, which must be 0)
+- eval: worked_examples.json + adversarial.json, `run_eval` (decision log, report.csv, trace.json, RESULTS.md), `verify_state` (asserts real system state, not the label), `demo`, `idempotency_demo`, `schema_repro`
 
 The decision log, eval report, and structured audit trace are the same data at three levels of detail - emit one rich structured audit record per ticket and derive all three from it.
 

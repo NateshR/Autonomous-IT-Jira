@@ -120,12 +120,18 @@ guard enforces the line in code, not prose:
   right for a genuine lockout (E-04) is refused when it is an MFA-fatigue attack
   (E-10). The class is a floor, not a ceiling.
 
-Authorization, not just identity: a user-affecting action requires the target to
-be the requester. Authority asserted in a ticket ("my manager said it's fine") is
-never trusted. On-behalf-of without proof fails closed (E-15, the costly false
-positive). Blast radius is enforced explicitly: a `no_fan_out` precondition
-refuses a team-wide/multi-target action ("reset the whole team"), and
-self-service tools can only ever target the requester.
+Authorization, not just identity: a user-affecting action requires two separate
+things, both checked in `guard._authorized`. The target must be the requester
+(on-behalf-of without proof fails closed - E-15, the costly false positive), AND
+that identity must check out in the directory: present and **active**. The second
+half matters because `user == reporter` is true for a terminated employee too, so
+self-service alone is not authorization (POL-10 §10.4 revokes access within the
+hour). Authority asserted in a ticket ("my manager said it's fine") is never
+trusted; a claimed approval id is looked up in the system of record via
+`iam.get_approval` rather than believed. Blast radius is enforced explicitly: a
+`no_fan_out` precondition refuses a team-wide/multi-target action ("reset the
+whole team"), self-service tools can only ever target the requester, and a filed
+request/case cannot name a third party as its subject.
 
 ## Idempotency and recovery
 
@@ -140,6 +146,39 @@ The Anthropic client is configured with explicit retries and a timeout (SDK
 exponential backoff on connection errors, 408/409/429, 5xx). Mock tool calls are
 in-memory; a real integration would wrap them with the same retry/timeout/backoff
 policy.
+
+## The bug that made a green eval lie
+
+Worth writing down, because it changed how this is verified.
+
+Every tool call the model proposed arrived with **no arguments**. Tools taking
+only `user` still appeared to work - the guard's `self_target` fallback fills it
+from the ticket reporter - so the happy path looked clean. Anything taking more
+(`open_incident(sev, summary)`, `create_approval(action, approvers)`,
+`grant_admin(user, minutes)`) raised on invocation and was downgraded to DEFER.
+
+It was invisible, because the eval graded the disposition **label**. E-07 scored a
+match while never routing an approval. E-09 scored a match while never opening an
+incident - and then commented that the on-call team had been paged. The decision
+log was clean; the work never happened. Three "conservative DEFERs" I had
+explained as good judgment were this bug.
+
+The cause was one field's type: `args: dict[str, Any]` compiles to a schema with
+`additionalProperties: true` and no declared properties, and the model returns
+`{}` every time - regardless of prompt wording, field description, or being marked
+required (`{}` satisfies `required`). `python -m eval.schema_repro` shows both
+shapes in one call each:
+
+```
+dict[str, Any]  -> args={}
+list[Arg]       -> args=[user=jsmith, minutes=30]
+```
+
+Same prompt, same model. The schema silently overrides the prompt.
+
+The fix was small. The lesson was not: **grading the label is not grading the
+action.** That is why `eval/verify_state.py` exists - it ignores what the agent
+says and asserts what the systems actually contain.
 
 ## What I would harden before production
 
@@ -173,7 +212,9 @@ their approver directory; the decision engine and guard are unchanged.
 agent/   pipeline, decider, guard, tools, handlers, retriever, llm, redaction, audit, models
 mock/    systems (Okta/ServiceNow/IAM/SOC/Directory), ticket_store adapter, seed, failure modes
 policies/ POL-01..10  (the only authorized knowledge source)
-eval/    worked_examples.json, adversarial.json, run_eval, demo, idempotency_demo
+eval/    worked_examples.json, adversarial.json, run_eval, verify_state, demo,
+         idempotency_demo, schema_repro + committed artifacts (report.csv, trace.json,
+         decision_log.txt, RESULTS.md, STATE_VERIFICATION.md)
 tests/   guard safety, idempotency, failure modes, redaction, pipeline (46 tests)
 ```
 
