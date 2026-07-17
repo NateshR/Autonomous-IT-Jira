@@ -16,6 +16,7 @@ import argparse
 import json
 from pathlib import Path
 
+from agent.audit import acceptable_answers, is_match
 from agent.config import SETTINGS
 from agent.constants import POLICY_DIR
 from agent.llm import build_llm
@@ -34,7 +35,7 @@ def _load(examples_path: str, ticket_id: str) -> dict | None:
     return None
 
 
-def run(ticket: Ticket, provider: str, model: str, expected: str | None):
+def run(ticket: Ticket, provider: str, model: str, example: dict | None):
     systems = seed_systems()
     ensure_user(systems, ticket.reporter)
     store = MockTicketStore()
@@ -81,9 +82,11 @@ def run(ticket: Ticket, provider: str, model: str, expected: str | None):
         print(f"  comment : {final.comments[-1][:200]}")
 
     print(f"\nOUTCOME: {rec.outcome}    UNSAFE ACTIONS: {rec.unsafe_action_count}")
-    if expected:
-        ok = "MATCH" if rec.disposition == expected else "differs"
-        print(f"EXPECTED: {expected}  ({ok})")
+    if example:
+        ok = "MATCH" if is_match(example, rec.disposition) else "differs"
+        alts = [a for a in acceptable_answers(example) if a != example.get("expected")]
+        also = f"  (also acceptable: {', '.join(alts)})" if alts else ""
+        print(f"EXPECTED: {example.get('expected')}  ({ok}){also}")
     print(BAR)
 
 
@@ -110,4 +113,4 @@ if __name__ == "__main__":
         if ex is None:
             raise SystemExit(f"ticket {args.ticket_id} not found in {args.examples}")
         t = Ticket(id=ex["id"], reporter=ex["reporter"], body=ex["body"])
-        run(t, args.provider, args.model, ex.get("expected"))
+        run(t, args.provider, args.model, ex)

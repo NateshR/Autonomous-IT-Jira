@@ -8,9 +8,11 @@ from.
 
 from __future__ import annotations
 
+import json
+
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Disposition = Literal[
     "ANSWER_ONLY",
@@ -31,9 +33,59 @@ class PolicySpan(BaseModel):
         return f"{self.policy_id} §{self.section}"
 
 
+class Arg(BaseModel):
+    """One tool argument as a name/value pair.
+
+    Why a pair and not a plain dict: a free-form ``dict[str, Any]`` compiles to a
+    JSON schema with ``additionalProperties: true`` and NO declared properties,
+    and the model then returns ``{}`` every time - regardless of prompt wording,
+    field description, or being marked required (``{}`` satisfies ``required``).
+    A list of typed pairs gives the decoder real structure to fill, and it does.
+    """
+
+    name: str = Field(description="exact parameter name from the tool catalog "
+                                  "signature, e.g. 'minutes'")
+    value: str = Field(description="the value, as a string. For a list, use "
+                                   "comma-separated values (e.g. "
+                                   "'manager,data-owner'). For a nested fields "
+                                   "object, use compact JSON (e.g. "
+                                   '\'{"asset":"LT-4471"}\').')
+
+
 class PlannedToolCall(BaseModel):
     tool: str = Field(description="tool name from the catalog, e.g. okta.unlock_account")
-    args: dict[str, Any] = Field(default_factory=dict)
+    args: list[Arg] = Field(
+        description="Every argument the tool's signature names. Never empty for a "
+                    "tool that takes parameters.")
+
+    @field_validator("args", mode="before")
+    @classmethod
+    def _accept_dict(cls, v: Any) -> Any:
+        """Let internal callers (tests, the stub LLM) construct with a plain dict
+        while the model still sees the list-of-pairs schema."""
+        if isinstance(v, dict):
+            return [{"name": k, "value": _to_str(val)} for k, val in v.items()]
+        return v
+
+    def arg_dict(self) -> dict[str, Any]:
+        """The args as a dict, with values decoded back to real types."""
+        return {a.name: _decode(a.value) for a in self.args}
+
+
+def _to_str(v: Any) -> str:
+    return v if isinstance(v, str) else json.dumps(v)
+
+
+def _decode(v: str) -> Any:
+    """Turn the string form back into a real type: JSON objects/arrays are parsed,
+    everything else stays a string (the guard coerces ints where it needs them)."""
+    s = v.strip()
+    if s[:1] in ("{", "["):
+        try:
+            return json.loads(s)
+        except ValueError:
+            return v
+    return v
 
 
 class Decision(BaseModel):

@@ -7,6 +7,8 @@ comment/transition.
 
 from __future__ import annotations
 
+import re
+
 from agent.constants import Status
 from agent.context import AgentContext
 from agent.guard import PartialFailure, ToolInvocationError, Unsafe, guarded_execute
@@ -175,10 +177,19 @@ _QUEUE_RULES = [
 ]
 
 
+# Whole-word matching, compiled once. Plain substring matching silently misroutes:
+# "hr" matches "through"/"threat"/"threshold", "pto" matches "laptop", "soc" matches
+# "associate", "geo" matches "geography" - so "this is a security threat" landed in
+# People Ops (which is listed first and therefore wins).
+_QUEUE_RES = [
+    (queue, re.compile("|".join(rf"\b{re.escape(k)}\b" for k in keywords), re.I))
+    for queue, keywords in _QUEUE_RULES
+]
+
+
 def _route_queue(reasoning: str) -> str:
-    text = reasoning.lower()
-    for queue, keywords in _QUEUE_RULES:
-        if any(k in text for k in keywords):
+    for queue, rx in _QUEUE_RES:
+        if rx.search(reasoning or ""):
             return queue
     return "Service Desk"
 

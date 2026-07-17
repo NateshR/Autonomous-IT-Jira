@@ -12,9 +12,23 @@ from pathlib import Path
 from agent.models import AuditRecord, fmt_tool_call
 
 
+def acceptable_answers(example: dict) -> list[str]:
+    """The dispositions that count as correct for this example. Some tickets have
+    more than one defensible answer (e.g. a false 'already approved' claim can be
+    deferred OR routed for real approval), so the key is a list; it falls back to
+    the single `expected` when no list is given. Keep these lists tight - a list
+    that admits most dispositions grades nothing."""
+    return example.get("acceptable", [example.get("expected")])
+
+
+def is_match(example: dict, disposition: str) -> bool:
+    """The one grader. Used by both the eval report and the demo so the two can
+    never disagree about whether a ticket passed."""
+    return disposition in acceptable_answers(example)
+
+
 def report_row(example: dict, rec: AuditRecord) -> dict:
-    acceptable = example.get("acceptable", [example.get("expected")])
-    match = rec.disposition in acceptable
+    match = is_match(example, rec.disposition)
     return {
         "id": rec.ticket_id,
         "expected": example.get("expected", ""),

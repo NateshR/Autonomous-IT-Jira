@@ -51,6 +51,11 @@ _ARG_ALIASES = {
 }
 
 
+# Args whose tool signature wants a list. The model emits these comma-separated
+# (see models.Arg), so split them back into a list here.
+_LIST_ARGS = ("approvers",)
+
+
 def _normalize_args(args: dict) -> dict:
     out: dict = {}
     for k, v in args.items():
@@ -60,6 +65,10 @@ def _normalize_args(args: dict) -> dict:
             out["minutes"] = int(out["minutes"])
         except (TypeError, ValueError):
             pass
+    for k in _LIST_ARGS:
+        v = out.get(k)
+        if isinstance(v, str):
+            out[k] = [p.strip() for p in v.split(",") if p.strip()]
     return out
 
 
@@ -154,7 +163,7 @@ def guarded_execute(
     if call.tool not in registry:
         raise Unsafe(f"{call.tool}: unknown tool")
     tool = registry[call.tool]
-    args = _normalize_args(call.args)
+    args = _normalize_args(call.arg_dict())
 
     # Self-service tools act on the requester's own account. If the model omits
     # the target, default it to the reporter - this can only ever target the

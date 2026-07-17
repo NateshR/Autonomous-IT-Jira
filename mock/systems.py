@@ -73,6 +73,7 @@ class MockSystems:
         self.incidents: dict[str, dict] = {}
         self.pages: list[dict] = []
         self.reset_emails: list[dict] = []
+        self.forced_resets: list[dict] = []
         # idempotency ledger: key -> stored result
         self._idem: dict[str, Any] = {}
         self._counter = 0
@@ -86,15 +87,24 @@ class MockSystems:
         self._counter += 1
         return f"{prefix}-{self._counter:04d}"
 
-    def _idempotent(self, key: str | None, produce: Callable[[], Any]) -> Any:
+    def _idempotent(self, key: str | None, produce: Callable[[], Any],
+                    ns: str = "") -> Any:
         """Run ``produce`` once per key. Repeat keys return the stored result
-        without re-running the effect."""
+        without re-running the effect.
+
+        ``ns`` namespaces the ledger per endpoint. Two different tools may share
+        an idempotency-key RECIPE (revoke_sessions and force_password_reset are
+        both user+incident; open_incident and page_oncall are both the ticket id)
+        - but they must never share a ledger SLOT, or the second call silently
+        returns the first one's cached response and never runs.
+        """
         if key is None:
             return produce()
-        if key in self._idem:
-            return {**self._idem[key], "idempotent_replay": True}
+        slot = f"{ns}:{key}"
+        if slot in self._idem:
+            return {**self._idem[slot], "idempotent_replay": True}
         result = produce()
-        self._idem[key] = result
+        self._idem[slot] = result
         return result
 
     # -------------------------------------------------------------- directory
@@ -143,7 +153,7 @@ class MockSystems:
             a.locked = False
             return {"status": "success", "user": user}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="okta_unlock_account")
 
     def okta_send_password_reset(self, user: str, idempotency_key: str | None = None) -> dict:
         def produce() -> dict:
@@ -151,7 +161,7 @@ class MockSystems:
             self.reset_emails.append({"user": user, "email": email})
             return {"status": "sent", "user": user, "email": email}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="okta_send_password_reset")
 
     def okta_revoke_sessions(self, user: str, idempotency_key: str | None = None) -> dict:
         def produce() -> dict:
@@ -160,13 +170,17 @@ class MockSystems:
                 a.active_sessions = 0
             return {"status": "revoked", "user": user}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="okta_revoke_sessions")
 
     def okta_force_password_reset(self, user: str, idempotency_key: str | None = None) -> dict:
         def produce() -> dict:
+            # Record the effect so the guard can re-read and verify it. A tool that
+            # mutates nothing cannot be verified, and an unverifiable containment
+            # step is one the agent could wrongly claim it performed.
+            self.forced_resets.append({"user": user})
             return {"status": "reset_forced", "user": user}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="okta_force_password_reset")
 
     # AMBER - must never be called inline; only reachable as a drafted action.
     def okta_disable_mfa(self, user: str, idempotency_key: str | None = None) -> dict:
@@ -176,7 +190,7 @@ class MockSystems:
                 a.mfa_enabled = False
             return {"status": "mfa_disabled", "user": user}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="okta_disable_mfa")
 
     # ------------------------------------------------------------- servicenow
     def servicenow_create_request(
@@ -187,7 +201,7 @@ class MockSystems:
             self.requests[rid] = {"id": rid, "item": item, "fields": fields, "status": "filed"}
             return {"status": "filed", "request_id": rid, "item": item}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="servicenow_create_request")
 
     # ---------------------------------------------------------------- endpoint
     def endpoint_grant_admin(
@@ -201,7 +215,7 @@ class MockSystems:
             self.admin_grants[gid] = {"id": gid, "user": user, "minutes": minutes}
             return {"status": "granted", "grant_id": gid, "user": user, "minutes": minutes}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="endpoint_grant_admin")
 
     # --------------------------------------------------------------- assetmgmt
     def assetmgmt_create_case(
@@ -218,7 +232,7 @@ class MockSystems:
             self.cases[cid]["cmdb_registered"] = True
             return {"status": "open", "case_id": cid, "case_type": case_type}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="assetmgmt_create_case")
 
     def delete_case(self, case_id: str) -> dict:
         """Rollback helper for a half-done create_case."""
@@ -239,7 +253,7 @@ class MockSystems:
             }
             return {"status": "PENDING", "approval_id": aid, "approvers": approvers}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="iam_create_approval")
 
     def iam_get_approval(self, approval_id: str) -> dict:
         rec = self.approvals.get(approval_id)
@@ -254,7 +268,7 @@ class MockSystems:
         def produce() -> dict:
             return {"status": "granted", "user": user, "system": system, "role": role}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="iam_grant_access")
 
     # -------------------------------------------------------------------- soc
     def soc_open_incident(
@@ -265,14 +279,14 @@ class MockSystems:
             self.incidents[iid] = {"id": iid, "sev": sev, "summary": summary, "status": "open"}
             return {"status": "open", "incident_id": iid, "sev": sev}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="soc_open_incident")
 
     def soc_page_oncall(self, team: str, idempotency_key: str | None = None) -> dict:
         def produce() -> dict:
             self.pages.append({"team": team})
             return {"status": "paged", "team": team}
 
-        return self._idempotent(idempotency_key, produce)
+        return self._idempotent(idempotency_key, produce, ns="soc_page_oncall")
 
     # -------------------------------------------------------- read-only verify
     def is_locked(self, user: str) -> bool:
@@ -295,3 +309,9 @@ class MockSystems:
 
     def incident_exists(self, incident_id: str) -> bool:
         return incident_id in self.incidents
+
+    def was_paged(self, team: str) -> bool:
+        return any(p["team"] == team for p in self.pages)
+
+    def reset_was_forced(self, user: str) -> bool:
+        return any(r["user"] == user for r in self.forced_resets)

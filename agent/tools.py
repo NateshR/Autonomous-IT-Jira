@@ -127,6 +127,14 @@ def _v_incident_open(a: dict, resp: dict, s: MockSystems) -> bool:
     return s.incident_exists(resp.get("incident_id", ""))
 
 
+def _v_paged(a: dict, resp: dict, s: MockSystems) -> bool:
+    return s.was_paged(a["team"])
+
+
+def _v_reset_forced(a: dict, resp: dict, s: MockSystems) -> bool:
+    return s.reset_was_forced(a["user"])
+
+
 # --------------------------------------------------------------- the registry
 
 def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
@@ -172,7 +180,9 @@ def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
         "okta.force_password_reset": Tool(
             "okta.force_password_reset", "GREEN", self_target=True, requires=["no_fan_out"],
             signature="user", hint="containment",
-            idem=_revoke_key,   # user + incident, same recipe
+            idem=_revoke_key,   # user + incident (same recipe as revoke_sessions;
+                                # the ledger namespaces per endpoint so they never collide)
+            verify=_v_reset_forced,
             fn=s.okta_force_password_reset),
         "servicenow.create_request": Tool(
             "servicenow.create_request", "GREEN",
@@ -215,6 +225,6 @@ def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
         "soc.page_oncall": Tool(
             "soc.page_oncall", "RED",
             signature="team", hint="escalation only",
-            idem=_incident_key,
+            idem=_incident_key, verify=_v_paged,
             fn=s.soc_page_oncall),
     }
