@@ -184,3 +184,56 @@ def test_verify_manager_checks_directory():
     r = guarded_execute(call("directory.verify_manager", manager="dwight",
                              subordinate="samlee"), ticket, reg, s)
     assert r.raw_response["verified"] is False   # dwight is not samlee's manager
+
+
+# ------------------------------------------- authorization via the directory
+
+def test_terminated_employee_cannot_act_on_their_own_account():
+    # "user == reporter" is TRUE for a terminated employee too, so self-service
+    # alone is not authorization. POL-10 §10.4 revokes access within 1 hour; the
+    # directory is the system of record that says so (§6.2).
+    s, reg = setup()
+    s.directory["jsmith"].active = False
+    ticket = Ticket(id="T", reporter="jsmith", body="I'm locked out of my own account")
+    with pytest.raises(Unsafe, match="authorized"):
+        guarded_execute(call("okta.unlock_account", user="jsmith"), ticket, reg, s)
+
+
+def test_unknown_identity_cannot_act():
+    # Not in the directory at all -> we cannot verify who this is -> refuse.
+    s, reg = setup()
+    del s.directory["jsmith"]
+    ticket = Ticket(id="T", reporter="jsmith", body="unlock me")
+    with pytest.raises(Unsafe, match="authorized"):
+        guarded_execute(call("okta.unlock_account", user="jsmith"), ticket, reg, s)
+
+
+def test_risk_signals_fail_closed_for_unknown_account():
+    # "we could not check" must never read as "it is clear" - on the one
+    # precondition the brief singles out (E-04 vs E-10).
+    s, reg = setup()
+    ticket = Ticket(id="T", reporter="ghost", body="unlock me")
+    s.directory["ghost"] = s.directory["jsmith"].__class__(
+        user="ghost", display_name="Ghost", manager="asmith")
+    with pytest.raises(Unsafe, match="risk_signals_clear"):
+        guarded_execute(call("okta.unlock_account", user="ghost"), ticket, reg, s)
+
+
+def test_case_cannot_be_filed_naming_someone_else():
+    # create_case/create_request take no top-level `user`, so `authorized` cannot
+    # cover them - but `fields` can still name a third party.
+    s, reg = setup()
+    ticket = Ticket(id="T", reporter="jsmith", body="file a lost laptop case")
+    with pytest.raises(Unsafe, match="fields_target_self"):
+        guarded_execute(call("assetmgmt.create_case", case_type="lost_stolen",
+                             fields={"user": "bwilliams", "asset": "LT-1"}),
+                        ticket, reg, s)
+
+
+def test_case_for_self_still_files():
+    s, reg = setup()
+    ticket = Ticket(id="T", reporter="jsmith", body="file a lost laptop case")
+    r = guarded_execute(call("assetmgmt.create_case", case_type="lost_stolen",
+                             fields={"user": "jsmith", "asset": "LT-1"}),
+                        ticket, reg, s)
+    assert r.verified

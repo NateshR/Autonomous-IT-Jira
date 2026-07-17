@@ -85,19 +85,39 @@ class PartialFailure(Exception):
 # name -> (ticket, args, systems) -> bool. True = precondition satisfied.
 
 def _authorized(ticket: Ticket, args: dict, s: MockSystems) -> bool:
-    """The requester must be acting on their own account. Authority asserted in
-    the ticket body is never trusted; on-behalf-of without proof fails here
-    (this is the costly false positive from E-15). A missing target fails closed
-    - this precondition is only attached to user-affecting tools."""
-    return args.get("user") == ticket.reporter
+    """The requester must be acting on their own account, AND that identity must
+    check out in the directory.
+
+    Two separate questions, both required (brief §3: directory reads are
+    "required before any user-affecting action"; §6.2: "verify it through the
+    directory, or defer"):
+
+    1. self-service - the target is the reporter. Authority asserted in the
+       ticket body is never trusted; on-behalf-of without proof fails here (the
+       costly false positive from E-15). A missing target fails closed.
+    2. identity - the user exists in the directory and is ACTIVE. Without this,
+       a terminated employee (POL-10 §10.4 revokes access within 1 hour) could
+       still unlock/reset their own account, because "user == reporter" is true
+       for them too.
+    """
+    user = args.get("user")
+    if not user or user != ticket.reporter:
+        return False
+    rec = s.lookup_user(user)
+    return bool(rec.get("found") and rec.get("active"))
 
 
 def _risk_signals_clear(ticket: Ticket, args: dict, s: MockSystems) -> bool:
     """Okta must report no compromise / MFA-fatigue / impossible-travel. This is
-    what promotes a GREEN unlock to a RED escalation in context (E-04 vs E-10)."""
+    what promotes a GREEN unlock to a RED escalation in context (E-04 vs E-10).
+
+    Fails CLOSED: no target, or an account Okta has never heard of, means we
+    cannot confirm the signals are clear - and "we could not check" must never
+    read as "it is clear" on the one precondition the brief singles out.
+    """
     user = args.get("user")
-    if user is None:
-        return True
+    if not user or user not in s.accounts:
+        return False
     return s.okta_risk_signals(user)["clear"]
 
 
@@ -125,11 +145,36 @@ def _no_fan_out(ticket: Ticket, args: dict, s: MockSystems) -> bool:
     return _FANOUT_RE.search(ticket.body or "") is None
 
 
+# Keys inside a `fields` payload that name a person. create_request/create_case
+# take no top-level `user`, so `authorized` cannot cover them - but their fields
+# can still name a third party ("file a lost-laptop case for bwilliams").
+_FIELD_SUBJECT_KEYS = ("user", "requested_for", "requester", "for", "employee",
+                       "on_behalf_of", "subject", "target_user")
+
+
+def _fields_target_self(ticket: Ticket, args: dict, s: MockSystems) -> bool:
+    """A filed request/case may only name the requester as its subject.
+
+    Blast radius here is a ticket rather than an entitlement, so this is a
+    lighter check than `authorized`: unknown/absent subject is allowed (the
+    request is simply about the reporter), but naming someone else is refused.
+    """
+    fields = args.get("fields")
+    if not isinstance(fields, dict):
+        return True
+    for k in _FIELD_SUBJECT_KEYS:
+        v = fields.get(k)
+        if isinstance(v, str) and v and v != ticket.reporter:
+            return False
+    return True
+
+
 PRECHECKS: dict[str, Callable[[Ticket, dict, MockSystems], bool]] = {
     "authorized": _authorized,
     "risk_signals_clear": _risk_signals_clear,
     "minutes_le_60": _minutes_le_60,
     "no_fan_out": _no_fan_out,
+    "fields_target_self": _fields_target_self,
 }
 
 

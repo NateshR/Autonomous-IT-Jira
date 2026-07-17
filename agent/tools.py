@@ -193,6 +193,7 @@ def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
         "servicenow.create_request": Tool(
             "servicenow.create_request", "GREEN",
             signature="item, fields", hint="files the request, does not grant it",
+            requires=["fields_target_self", "no_fan_out"],
             idem=_request_key(s), verify=_v_request_filed,
             fn=s.servicenow_create_request),
         "endpoint.grant_admin": Tool(
@@ -204,6 +205,7 @@ def build_tool_registry(s: MockSystems) -> dict[str, Tool]:
         "assetmgmt.create_case": Tool(
             "assetmgmt.create_case", "GREEN",
             signature="case_type, fields", hint="lost/stolen or offboarding case",
+            requires=["fields_target_self", "no_fan_out"],
             idem=_case_key, verify=_v_case_registered,
             fn=s.assetmgmt_create_case),
         "iam.create_approval": Tool(
