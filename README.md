@@ -34,7 +34,7 @@ log line. Grading the label is not grading the action.
 pip install -r requirements.txt
 cp .env.example .env          # add your ANTHROPIC_API_KEY
 
-pytest                        # 41 tests - guard safety, no API key needed
+pytest                        # 46 tests - guard safety, no API key needed
 python -m eval.run_eval       # 17 examples through claude-opus-4-8
 python -m eval.run_eval --examples eval/adversarial.json   # attack suite
 python -m eval.idempotency_demo                            # retry+dup act once (no key)
@@ -167,7 +167,7 @@ agent/   pipeline, decider, guard, tools, handlers, retriever, llm, redaction, a
 mock/    systems (Okta/ServiceNow/IAM/SOC/Directory), ticket_store adapter, seed, failure modes
 policies/ POL-01..10  (the only authorized knowledge source)
 eval/    worked_examples.json, adversarial.json, run_eval, demo, idempotency_demo
-tests/   guard safety, idempotency, failure modes, redaction, pipeline (41 tests)
+tests/   guard safety, idempotency, failure modes, redaction, pipeline (46 tests)
 ```
 
 Known seeded usernames (for authz in test tickets): `jsmith`, `mtaylor`,

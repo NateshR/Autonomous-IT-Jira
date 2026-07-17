@@ -11,7 +11,7 @@ A take-home assignment (Leena.ai Forward Deployed Engineer): an AI agent that mo
 ## Commands
 
 - Setup: `pip install -r requirements.txt`, then `cp .env.example .env` and add `ANTHROPIC_API_KEY`.
-- Tests: `pytest` (41 tests; guard/pipeline safety, no API key needed). Single test: `pytest tests/test_guard.py::test_unlock_blocked_when_mfa_fatigue`.
+- Tests: `pytest` (46 tests; guard/pipeline safety, no API key needed). Single test: `pytest tests/test_guard.py::test_unlock_blocked_when_mfa_fatigue`.
 - Eval (real model): `python -m eval.run_eval` (17 worked examples) or `--examples eval/adversarial.json`. `--provider stub` runs the harness with no key.
 - Demo (Loom-ready trace): `python -m eval.demo E-04` (action) / `python -m eval.demo E-07` (privileged request refused AND routed) / `python -m eval.demo E-13` (injection refused).
 - State verification: `python -m eval.verify_state` (asserts real system state, not the disposition label, on all 23 tickets).
