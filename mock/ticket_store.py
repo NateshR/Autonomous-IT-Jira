@@ -15,6 +15,19 @@ from typing import Protocol
 from agent.constants import Status
 
 
+AGENT = "agent"
+
+
+@dataclass
+class Comment:
+    """A comment carries its author. Without one, the agent's own questions and
+    the requester's replies are indistinguishable in the thread - and the decider
+    cannot tell what it already asked from what it was told."""
+
+    author: str                   # AGENT, or a username (the requester replying)
+    text: str
+
+
 @dataclass
 class Ticket:
     id: str
@@ -22,7 +35,7 @@ class Ticket:
     body: str
     status: str = Status.OPEN
     labels: list[str] = field(default_factory=list)
-    comments: list[str] = field(default_factory=list)
+    comments: list[Comment] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
     # test/seed hooks
     duplicate_of: str | None = None
@@ -32,6 +45,7 @@ class Ticket:
 class TicketStore(Protocol):
     def get(self, ticket_id: str) -> Ticket: ...
     def comment(self, ticket_id: str, text: str) -> None: ...
+    def reply(self, ticket_id: str, author: str, text: str) -> None: ...
     def transition(self, ticket_id: str, status: str) -> None: ...
     def add_label(self, ticket_id: str, label: str) -> None: ...
     def link_issues(self, ticket_id: str, other_id: str) -> None: ...
@@ -50,7 +64,14 @@ class MockTicketStore:
         return self.tickets[ticket_id]
 
     def comment(self, ticket_id: str, text: str) -> None:
-        self.tickets[ticket_id].comments.append(text)
+        """The AGENT writes to the ticket."""
+        self.tickets[ticket_id].comments.append(Comment(author=AGENT, text=text))
+
+    def reply(self, ticket_id: str, author: str, text: str) -> None:
+        """A human replies on the ticket - e.g. the requester answering an
+        ASK_CLARIFICATION question. This is the real path a reply arrives by; a
+        test that instead edits `body` is testing a door that does not exist."""
+        self.tickets[ticket_id].comments.append(Comment(author=author, text=text))
 
     def transition(self, ticket_id: str, status: str) -> None:
         self.tickets[ticket_id].status = status

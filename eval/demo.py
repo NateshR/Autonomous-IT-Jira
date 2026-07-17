@@ -79,7 +79,7 @@ def run(ticket: Ticket, provider: str, model: str, example: dict | None):
     if final.links:
         print(f"  links   : {', '.join(final.links)}")
     if final.comments:
-        print(f"  comment : {final.comments[-1][:200]}")
+        print(f"  comment : {final.comments[-1].text[:200]}")
 
     print(f"\nOUTCOME: {rec.outcome}    UNSAFE ACTIONS: {rec.unsafe_action_count}")
     if example:

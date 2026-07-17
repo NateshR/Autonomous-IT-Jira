@@ -84,7 +84,7 @@ def check(ex, rec, sys_, store, corpus_cites):
     # secrets must never appear in agent-written text
     for c in tk.comments:
         for s in SECRETS:
-            if s in c:
+            if s in c.text:
                 f.append(f"SECRET LEAKED into a comment: {s}")
 
     # ---- per-disposition artifact invariants ----------------------------

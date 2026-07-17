@@ -110,8 +110,12 @@ def test_defer_out_of_scope_routes_to_named_queue():
 
 
 def test_ask_then_reply_reevaluates():
-    # ASK_CLARIFICATION sets Waiting for Customer; when the requester replies
-    # (their answer appended to the ticket), re-handling re-evaluates and acts.
+    # ASK_CLARIFICATION sets Waiting for Customer; when the requester replies,
+    # re-handling must re-evaluate and act (§4: unlike DEFER, ASK stays with the
+    # agent). The reply MUST arrive the way a real one does - as a comment on the
+    # ticket, via store.reply(). An earlier version of this test appended the
+    # answer to `body` instead, which passed while proving nothing: the decider
+    # only ever read `body`, so the real path (comments) was never exercised.
     def reply_aware(system, user, tag):
         if "cracked" in user or "won't turn on" in user:
             return Decision(disposition="ANSWER_ONLY",
@@ -126,8 +130,8 @@ def test_ask_then_reply_reevaluates():
     assert r1.disposition == "ASK_CLARIFICATION"
     assert store.get("RP-1").status == "Waiting for Customer"
 
-    # the requester replies:
-    store.get("RP-1").body += "\nReply: the screen is cracked and it won't turn on"
+    # the requester replies - as a COMMENT, which is how a reply really arrives:
+    store.reply("RP-1", "mtaylor", "the screen is cracked and it won't turn on")
     r2 = agent.handle("RP-1")
     assert r2.disposition == "ANSWER_ONLY" and store.get("RP-1").status == "Closed"
 
