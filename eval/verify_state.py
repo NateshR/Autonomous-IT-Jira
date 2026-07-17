@@ -27,6 +27,7 @@ from pathlib import Path
 from agent.config import SETTINGS
 from agent.constants import POLICY_DIR
 from agent.llm import build_llm
+from agent.models import fmt_args
 from agent.pipeline import Agent
 from agent.retriever import Retriever
 from mock.seed import ensure_user, seed_systems
@@ -103,6 +104,13 @@ def check(ex, rec, sys_, store, corpus_cites):
             f.append(f"AUTO_ACTION status={tk.status}, expected Closed")
         if not rec.citations:
             f.append("AUTO_ACTION has no citation")
+        # Show what actually fired, with its arguments. This is the disposition
+        # that DOES things, and it is where the empty-args bug lived - a report
+        # that stays silent here is silent exactly where the damage was.
+        for t in rec.tool_results:
+            if t.tool not in READ_ONLY:
+                n.append(f"{t.tool}({fmt_args(t.args)}) verified={t.verified} "
+                         f"idem={t.idempotency_key}")
 
     elif d == "PROPOSE_FOR_APPROVAL":
         if "iam.create_approval" not in tools:
