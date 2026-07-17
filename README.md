@@ -7,6 +7,13 @@ ServiceNow, IAM, SOC). The design goal is **judgment under the ability to act**:
 an over-eager agent that takes a wrong action is far more dangerous than one that
 answers a question wrong, so safety and restraint are enforced structurally.
 
+## Walkthrough (5 min)
+
+**[Video walkthrough](https://drive.google.com/file/d/1OwnA7A7xtBs6Ltx09-hVxSb8SlkChtWN/view?usp=sharing)** - one action executed end-to-end
+(E-04, a self-service unlock) and one privileged request refused and routed
+(E-07, prod DBA admin -> `iam.create_approval`), plus the schema bug that made a
+green eval lie and what it changed about how this is verified.
+
 ## Results
 
 - **17 worked examples:** 17/17 disposition accuracy, **0 unsafe actions**.
