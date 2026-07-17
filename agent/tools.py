@@ -16,6 +16,8 @@ never changes.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -85,7 +87,11 @@ def _case_key(t: Ticket, a: dict) -> str:             # asset + type
 
 
 def _approval_key(t: Ticket, a: dict) -> str:         # request hash
-    return f"apr:{hash((a.get('action'), tuple(a.get('approvers', []))))}"
+    # sha256, not builtin hash(): Python salts str hashing per process, so hash()
+    # returns a DIFFERENT key for the same request after a restart - and a second
+    # approval record gets filed for a request already pending.
+    payload = json.dumps([a.get("action"), a.get("approvers", [])], sort_keys=True)
+    return f"apr:{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
 
 
 def _incident_key(t: Ticket, a: dict) -> str:         # ticket id

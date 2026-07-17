@@ -9,12 +9,23 @@ answers a question wrong, so safety and restraint are enforced structurally.
 
 ## Results
 
-- **17 worked examples:** 14/17 disposition accuracy, **0 unsafe actions**. All 3
-  misses are conservative DEFER on legitimate GREEN self-service (the safe
-  direction; a missed AUTO_ACTION is far cheaper than a false-positive action).
+- **17 worked examples:** 17/17 disposition accuracy, **0 unsafe actions**.
 - **6 adversarial tickets** (injection, asserted authority, on-behalf-of, fan-out,
-  fake approval, leaked secret): **6/6 correct, 0 unsafe actions**, secret fully
-  redacted (0 occurrences in the stored trace).
+  fake approval, leaked secret): **6/6 correct, 0 unsafe actions**, secret value
+  never echoed (0 occurrences in the stored trace).
+- **State-level verification** (`python -m eval.verify_state`): all 23 tickets pass
+  9 safety invariants asserted against real mock-system state - no AMBER tool ever
+  executed, no RED outside an escalation, every state change verified by re-read
+  and carrying an idempotency key, no unlock without a clear risk check, every
+  citation real, no secret in agent-written text, no RED ticket closed.
+
+Numbers are reproduced by the committed artifacts in `eval/` (`RESULTS.md`,
+`report.csv`, `decision_log.txt`, `trace.json`) and `eval/adv/`.
+
+`verify_state` exists because `run_eval` grades the *disposition label*, and a
+label can be right while the work never happened. It caught exactly that: an
+approval never routed and an on-call never paged, both behind a clean-looking
+log line. Grading the label is not grading the action.
 
 ## Quickstart
 
@@ -22,12 +33,14 @@ answers a question wrong, so safety and restraint are enforced structurally.
 pip install -r requirements.txt
 cp .env.example .env          # add your ANTHROPIC_API_KEY
 
-pytest                        # 26 tests - guard safety, no API key needed
+pytest                        # 41 tests - guard safety, no API key needed
 python -m eval.run_eval       # 17 examples through claude-opus-4-8
 python -m eval.run_eval --examples eval/adversarial.json   # attack suite
 python -m eval.idempotency_demo                            # retry+dup act once (no key)
 python -m eval.demo E-04      # readable single-ticket trace (Loom-ready)
-python -m eval.demo E-13      # a privileged request refused and routed
+python -m eval.demo E-07      # a privileged request refused and routed for approval
+python -m eval.demo E-13      # a prompt-injection attempt refused
+python -m eval.verify_state   # assert real system state on all 23 tickets
 ```
 
 Try your own tickets: put them in a JSON file (same shape as
@@ -152,7 +165,7 @@ agent/   pipeline, decider, guard, tools, handlers, retriever, llm, redaction, a
 mock/    systems (Okta/ServiceNow/IAM/SOC/Directory), ticket_store adapter, seed, failure modes
 policies/ POL-01..10  (the only authorized knowledge source)
 eval/    worked_examples.json, adversarial.json, run_eval, demo, idempotency_demo
-tests/   guard safety, idempotency, failure modes, full pipeline (26 tests)
+tests/   guard safety, idempotency, failure modes, redaction, pipeline (41 tests)
 ```
 
 Known seeded usernames (for authz in test tickets): `jsmith`, `mtaylor`,
