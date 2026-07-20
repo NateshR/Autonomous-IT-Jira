@@ -32,6 +32,7 @@ The stack: Python 3.11+, `anthropic` SDK (default model `claude-opus-4-8`), `pyd
 
 These are load-bearing. A single violation can cap the whole submission. Preserve them in any code you write:
 
+- **Safety lives in `guarded_execute`, never in a handler.** Three handlers reach tools (AUTO_ACTION, ESCALATE_INCIDENT, PROPOSE_FOR_APPROVAL) and all three go through the guard. A new safety check belongs in `guard.PRECHECKS` plus a `requires` entry - never as an `if` inside a handler, or it protects one path and not the others.
 - **The LLM proposes; deterministic code disposes.** The LLM only outputs a structured decision (`{disposition, citation, planned_tool_calls, reasoning}`). It must never call real tools directly. A separate deterministic guard is the ONLY place real actions fire.
 - **Risk-class enforcement lives in the guard, not in the prompt.** AMBER tools (`iam.grant_access`, `okta.disable_mfa`) must be structurally unreachable inline - only draftable inside `iam.create_approval`. RED tools (`soc.*`) only during an incident escalation. GREEN tools only after authorization is verified.
 - **Risk class is a floor, not a ceiling.** Context promotes GREEN to RED. Specifically: never call `okta.unlock_account` without first calling `okta.risk_signals` and confirming it is clear (see worked examples E-04 vs E-10).
@@ -51,22 +52,6 @@ Four rules that each shipped broken once, invisibly - the decision log looked co
 - **Every state-changing tool declares a `verify=`.** Only the AMBER tools may omit it, being structurally unreachable.
 
 After touching any of these run `python -m eval.verify_state`, not just `run_eval` - it asserts real system state rather than the disposition label, which is what catches this whole class of bug.
-
-## Architecture
-
-A five-stage pipeline, identical for every ticket:
-
-```
-INGEST (re-read ticket, detect dupes/withdrawals)
-  -> RETRIEVE (search 10 policies -> cited spans)
-  -> DECIDE (LLM -> structured disposition)
-  -> GUARD + EXECUTE (deterministic safety inspector; only place tools fire)
-  -> RECORD (jira comment + citation, decision log, close/leave pending)
-```
-
-Each of the six dispositions maps to its own handler that produces exactly its required artifact (see NOTES.md §4). Three handlers reach tools, and every one of them goes through the guard: AUTO_ACTION (GREEN actions), ESCALATE_INCIDENT (RED `soc.*` plus GREEN containment, via `in_escalation=True` - the only thing that permits RED), and PROPOSE_FOR_APPROVAL (only `iam.create_approval`; it has no code path to the AMBER tool itself). ANSWER_ONLY / ASK_CLARIFICATION / DEFER_HUMAN never mutate. Safety does not concentrate in a handler - it concentrates in `guarded_execute`.
-
-Module split and the component map: `LLD.md` §2. The decision log, eval report, and structured trace are the same data at three levels of detail - one `AuditRecord` per ticket, all three derived from it.
 
 ## Mock
 
