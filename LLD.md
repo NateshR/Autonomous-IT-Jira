@@ -38,12 +38,18 @@ flowchart LR
         HAND[handlers.py<br/>6 disposition handlers]
         RED[redaction.py]
         AUD[audit.py]
-        MOD[models.py<br/>Decision / ToolResult / AuditRecord]
+        MOD[models.py<br/>Decision / Arg / ToolResult / AuditRecord]
+        CON[constants.py<br/>POLICY_DIR / Status]
     end
     subgraph mock["mock/ (fake enterprise systems)"]
         SYS[systems.py<br/>Okta/ServiceNow/IAM/SOC/Directory]
         TS[ticket_store.py<br/>JIRA adapter]
         SEED[seed.py]
+    end
+    subgraph evl["eval/ (how it is measured)"]
+        RUN[run_eval.py<br/>grades the DISPOSITION]
+        VS[verify_state.py<br/>grades the SYSTEM STATE]
+        DEM[demo / idempotency_demo / schema_repro]
     end
     POL[policies/<br/>POL-01..10]
 
@@ -53,6 +59,10 @@ flowchart LR
     HAND --> TS
     PIPE --> AUD
     GUARD -.reads.-> MOD
+    RUN --> PIPE
+    VS --> PIPE
+    VS -.asserts real state.-> SYS
+    DEM --> PIPE
 ```
 
 | Component | File | Responsibility |
@@ -124,14 +134,14 @@ flowchart TD
     C -- no --> D{duplicate_of set?}
     D -- yes --> D1[link to original + comment, no action] --> Z
     D -- no --> E[RETRIEVE - rank spans, full corpus also passed]
-    E --> F[DECIDE: LLM returns a Decision proposal]
+    E --> F[DECIDE: body + comment thread + full corpus<br/>LLM returns a Decision proposal]
     F --> G[GROUNDING GATE: drop invalid citations]
     G --> H{acting/answering with no valid citation?}
     H -- yes --> H1[rewrite to DEFER_HUMAN]
     H -- no --> I[dispatch HANDLERS by disposition]
     H1 --> I
     I --> J[handler runs tools via the GUARD]
-    J --> K[RECORD: unsafe_action_count = 0]
+    J --> K[RECORD: tally unsafe_action_count<br/>always 0 - the guard raises before a tool runs]
     K --> Z
 ```
 
@@ -163,7 +173,7 @@ flowchart TD
     B3 --> C{risk class}
     C -- AMBER --> X1[raise Unsafe: never inline]
     C -- RED and not in_escalation --> X2[raise Unsafe: escalation only]
-    C -- GREEN or RED-in-escalation --> D[loop tool.requires]
+    C -- GREEN or RED-in-escalation --> D[loop tool.requires in declared order<br/>authorized / risk_signals_clear / minutes_le_60<br/>no_fan_out / fields_target_self]
     D --> E{every PRECHECK passes vs real state?}
     E -- no --> X3[raise Unsafe: precondition failed]
     E -- yes --> F[build idempotency key]
@@ -248,20 +258,33 @@ sequenceDiagram
     participant S as mock.systems
 
     P->>P: read ticket E-04, not duplicate or withdrawn
-    P->>R: search body, returns POL-01 1.4
-    P->>L: decide, returns AUTO_ACTION plus unlock plan
-    P->>P: grounding check, POL-01 1.4 exists, ok
+    P->>R: search body, returns POL-01 1.4 as a ranking hint
+    P->>L: decide with body plus the full 60-span corpus
+    L-->>P: AUTO_ACTION, cite POL-01 1.4, plan risk_signals then unlock
+    P->>P: grounding check, POL-01 1.4 exists in corpus, ok
     P->>H: dispatch AUTO_ACTION handler
-    H->>G: unlock user jsmith
-    G->>G: risk gate GREEN, pass
-    G->>S: risk_signals jsmith, returns clear
-    G->>G: authorized pass, no_fan_out pass
+
+    Note over H,G: call 1 of 2 - the model's own read
+    H->>G: okta.risk_signals jsmith
+    G->>S: okta_risk_signals jsmith
+    S-->>G: clear true
+
+    Note over H,G: call 2 of 2 - the guard re-checks independently
+    H->>G: okta.unlock_account jsmith
+    G->>G: risk class GREEN, pass
+    G->>S: lookup_user jsmith for the authorized check
+    S-->>G: found true and active true
+    G->>S: okta_risk_signals jsmith for risk_signals_clear
+    S-->>G: clear true
+    G->>G: no_fan_out pass
     G->>S: unlock jsmith with key jsmith-1001
-    S-->>G: status success, account now unlocked
-    G->>S: is_locked jsmith, returns False so verified true
+    S-->>G: status success
+    G->>S: is_locked jsmith
+    S-->>G: False, so verified true
     G-->>H: ToolResult verified
+
     H->>P: comment Done cite POL-01 1.4, then Close
-    P->>P: unsafe_action_count = 0
+    P->>P: tally unsafe_action_count, 0
 ```
 
 Flip the input to E-10 (`pjones`, `mfa_fatigue=True`): the `risk_signals_clear`
