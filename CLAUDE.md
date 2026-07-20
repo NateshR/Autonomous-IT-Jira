@@ -6,7 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A take-home assignment (Leena.ai Forward Deployed Engineer): an AI agent that monitors a JIRA Service Desk for a fictional regulated company (Helix Industries) and, per ticket, chooses one of six dispositions and executes the correct action(s) against MOCK enterprise systems (Okta, ServiceNow, IAM, SOC). It is graded primarily on action safety and restraint, not answer quality.
 
-**`NOTES.md` is the full spec and the source of truth.** Read it before doing any design or implementation work. It contains the 10-policy knowledge base (condensed), the tool catalog with risk classes and idempotency keys, the six dispositions, all 17 worked examples, the edge cases, the mock requirements, the deliverables, and the evaluation rubric.
+## Where things are documented
+
+Read the right file rather than duplicating it here.
+
+| File | What it holds |
+|---|---|
+| `NOTES.md` | **the spec, and the source of truth** - policies, tool catalog with risk classes and idempotency keys, the six dispositions, all 17 worked examples, edge cases, mock requirements, deliverables, rubric. Read before any design work. |
+| `LLD.md` | how the code actually works - component map, data models, pipeline and guard flowcharts, the six handlers, a worked E-04 trace, idempotency/verification, §12 edge-case-to-test map, §13 the regression write-ups |
+| `README.md` | the submission summary: architecture, prompt strategy, grounding, act-vs-instruct, what to harden, deployment judgment |
+| `BUILD_PLAN.md` | the phased plan |
 
 ## Commands
 
@@ -32,16 +41,18 @@ These are load-bearing. A single violation can cap the whole submission. Preserv
 - **Idempotency.** Every state-changing tool call carries the documented idempotency key (see the tool table in NOTES.md §3) so retries/duplicates never double-act. Re-read ticket state immediately before executing to honor withdrawals.
 - **Never "resolve and close" a RED (security) ticket** with a policy snippet. Redact secrets found in ticket bodies; never echo them into a comment or log.
 
-## Regression traps (each of these shipped once and was invisible)
+## Regression traps
 
-Every one of these looked correct in the decision log while the work silently did not happen. `python -m eval.verify_state` is what catches them - it asserts real mock-system state rather than the disposition label. Run it, not just `run_eval`, after touching any of this.
+Four rules that each shipped broken once, invisibly - the decision log looked correct while the work never happened. Why, and what it cost, is in `LLD.md` §13. Do not undo them:
 
-- **Never make `PlannedToolCall.args` a free-form `dict[str, Any]`.** It compiles to a JSON schema with `additionalProperties: true` and no declared properties, and the model then returns `{}` every time - regardless of prompt wording, field description, or being marked required (`{}` satisfies `required`). Every tool call arrived argument-less; tools taking only `user` still "worked" because the guard's `self_target` fallback filled it in. Keep the `list[Arg]` name/value shape. `python -m eval.schema_repro` demonstrates both in one call each.
-- **Two tools may share an idempotency-key RECIPE, never a ledger SLOT.** `revoke_sessions`/`force_password_reset` are both user+incident; `open_incident`/`page_oncall` are both the ticket id. The ledger is namespaced per endpoint (`mock/systems.py:_idempotent(ns=...)`). Without that, the second tool returns the first one's cached response and never runs - on-call was never paged while the ticket said it was.
-- **Redaction must keep the label and mask only the value** (`password is [REDACTED-SECRET]`, not `[REDACTED]`). Masking the label destroys the fact that a credential was disclosed, which is an ESCALATE_INCIDENT trigger - the agent went blind and asked for clarification instead. The secret value must still never reach the model, a comment, or a log.
-- **Every state-changing tool needs a `verify=`.** The two that lacked one are exactly where the silent failure hid. Only the AMBER tools may have none, because they are structurally unreachable.
+- **`PlannedToolCall.args` stays `list[Arg]`.** Never a free-form `dict[str, Any]`.
+- **Two tools may share an idempotency-key recipe, never a ledger slot.** The ledger is namespaced per endpoint (`mock/systems.py::_idempotent(ns=...)`).
+- **Redaction keeps the label, masks only the value** (`password is [REDACTED-SECRET]`).
+- **Every state-changing tool declares a `verify=`.** Only the AMBER tools may omit it, being structurally unreachable.
 
-## Intended architecture
+After touching any of these run `python -m eval.verify_state`, not just `run_eval` - it asserts real system state rather than the disposition label, which is what catches this whole class of bug.
+
+## Architecture
 
 A five-stage pipeline, identical for every ticket:
 
@@ -55,17 +66,11 @@ INGEST (re-read ticket, detect dupes/withdrawals)
 
 Each of the six dispositions maps to its own handler that produces exactly its required artifact (see NOTES.md §4). Three handlers reach tools, and every one of them goes through the guard: AUTO_ACTION (GREEN actions), ESCALATE_INCIDENT (RED `soc.*` plus GREEN containment, via `in_escalation=True` - the only thing that permits RED), and PROPOSE_FOR_APPROVAL (only `iam.create_approval`; it has no code path to the AMBER tool itself). ANSWER_ONLY / ASK_CLARIFICATION / DEFER_HUMAN never mutate. Safety does not concentrate in a handler - it concentrates in `guarded_execute`.
 
-Module split:
-- agent: pipeline loop, retriever, decider (LLM), guard, tool registry, disposition handlers, redaction, audit, constants
-- mock: in-memory fake systems, the two deliberate failure modes, seed data, ticket store (JIRA behind an adapter)
-- policies: POL-01 .. POL-10 knowledge base
-- eval: worked_examples.json + adversarial.json, `run_eval` (decision log, report.csv, trace.json, RESULTS.md), `verify_state` (asserts real system state, not the label), `demo`, `idempotency_demo`, `schema_repro`
+Module split and the component map: `LLD.md` §2. The decision log, eval report, and structured trace are the same data at three levels of detail - one `AuditRecord` per ticket, all three derived from it.
 
-The decision log, eval report, and structured audit trace are the same data at three levels of detail - emit one rich structured audit record per ticket and derive all three from it.
+## Mock
 
-## Mock requirements (from NOTES.md §7)
-
-Keep the mock small (in-memory dicts). It must implement: idempotency keys; two failure modes (a silent no-op that returns success without effect, and a multi-step action whose second step fails); and seed data (a directory for authz, a compromised account for the MFA-fatigue case, an in-flight ticket a duplicate can map to). Mock the AMBER tools + `iam.get_approval` specifically so the guardrail can prove the agent refuses to grant without an approved record. Never wire the agent to real Okta or production IAM.
+Requirements are `NOTES.md` §7; the implementation is `mock/`. Keep it small (in-memory dicts) - the assignment grades the agent, not the mock. Two rules that are not negotiable: the two deliberate failure modes stay (silent no-op, step-2 failure), and **the agent is never wired to real Okta or production IAM**.
 
 ## Conventions
 
