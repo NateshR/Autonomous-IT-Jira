@@ -25,6 +25,7 @@ Read the right file rather than duplicating it here.
 - Demo (Loom-ready trace): `python -m eval.demo E-04` (action) / `python -m eval.demo E-07` (privileged request refused AND routed) / `python -m eval.demo E-13` (injection refused).
 - State verification: `python -m eval.verify_state` (asserts real system state, not the disposition label, on all 23 tickets).
 - Idempotency demo (no key): `python -m eval.idempotency_demo`.
+- Schema repro: `python -m eval.schema_repro` (why `args` must stay `list[Arg]` - see traps below).
 
 The stack: Python 3.11+, `anthropic` SDK (default model `claude-opus-4-8`), `pydantic`, `pytest`. Provider is `stub` unless `ANTHROPIC_API_KEY` is set.
 
@@ -34,12 +35,14 @@ These are load-bearing. A single violation can cap the whole submission. Preserv
 
 - **Safety lives in `guarded_execute`, never in a handler.** Three handlers reach tools (AUTO_ACTION, ESCALATE_INCIDENT, PROPOSE_FOR_APPROVAL) and all three go through the guard. A new safety check belongs in `guard.PRECHECKS` plus a `requires` entry - never as an `if` inside a handler, or it protects one path and not the others.
 - **The LLM proposes; deterministic code disposes.** The LLM only outputs a structured decision (`{disposition, citation, planned_tool_calls, reasoning}`). It must never call real tools directly. A separate deterministic guard is the ONLY place real actions fire.
-- **Risk-class enforcement lives in the guard, not in the prompt.** AMBER tools (`iam.grant_access`, `okta.disable_mfa`) must be structurally unreachable inline - only draftable inside `iam.create_approval`. RED tools (`soc.*`) only during an incident escalation. GREEN tools only after authorization is verified.
+- **Risk-class enforcement lives in the guard, not in the prompt.** AMBER tools (`iam.grant_access`, `okta.disable_mfa`) are structurally unreachable inline - only draftable inside `iam.create_approval`. RED tools (`soc.*`) run only during an incident escalation. GREEN tools run only after the preconditions their registry row declares.
+- **Not every GREEN tool takes `authorized`, and that is deliberate.** It gates tools that change a specific person's access (unlock, password reset, grant_admin). Containment tools (`revoke_sessions`, `force_password_reset`) omit it on purpose - they reduce access during an incident, and requiring target==reporter would stop SOC containing a compromised account. `create_request`/`create_case` take no top-level `user` at all, so they use `fields_target_self` instead. Match the gate to the tool; do not blanket-apply `authorized`.
 - **Risk class is a floor, not a ceiling.** Context promotes GREEN to RED. Specifically: never call `okta.unlock_account` without first calling `okta.risk_signals` and confirming it is clear (see worked examples E-04 vs E-10).
 - **Verify before claiming success.** One mock endpoint silently no-ops; after any state-changing call, re-read state to confirm the effect before commenting "done."
 - **Authorization, not just identity.** Before any user-affecting action, verify the requester is authorized for the target (self vs on-behalf-of; manager/data-owner relationships) via `directory.*`. Never trust authority asserted in the ticket body ("my manager said it's fine").
 - **Grounding is mandatory.** Every answer and every action must cite a specific policy section (POL-NN §N.N), and no answering from the LLM's prior knowledge. Enforced by validating each citation against the corpus: a section that does not exist is dropped, and an answer or action left with no valid citation is downgraded to DEFER. (The brief frames this as below-threshold retrieval -> DEFER; the retrieval threshold gates nothing here because the full corpus is passed every ticket, so citation validation is the mechanism that does the work.)
-- **Idempotency.** Every state-changing tool call carries the documented idempotency key (see the tool table in NOTES.md §3) so retries/duplicates never double-act. Re-read ticket state immediately before executing to honor withdrawals.
+- **Idempotency.** Every state-changing tool call carries the documented idempotency key (see the tool table in NOTES.md §3) so retries/duplicates never double-act.
+- **Ingest re-reads the ticket by id before anything else** (`pipeline.handle`), and a withdrawal or duplicate returns immediately - before retrieve, decide, or any tool. Note the honest limit: decision and execution happen inside one call here, so there is no window between them; the brief's concern is a queued or deferred system, where the re-read would have to move to just before execution.
 - **Never "resolve and close" a RED (security) ticket** with a policy snippet. Redact secrets found in ticket bodies; never echo them into a comment or log.
 
 ## Regression traps
