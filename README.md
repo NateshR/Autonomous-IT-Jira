@@ -137,7 +137,11 @@ request/case cannot name a third party as its subject.
 
 Every state-changing tool call carries the documented idempotency key (e.g.
 unlock uses account + lock epoch), so a retry or duplicate acts once; duplicate
-tickets are linked, not re-acted. After every action the effect is re-read from
+tickets are linked, not re-acted. The ledger is namespaced per endpoint: two
+tools may share a key *recipe* (revoke/force-reset are both user+incident,
+open_incident/page_oncall are both the ticket id) but must never share a ledger
+*slot*, or the second silently returns the first's cached response and never
+runs. After every action the effect is re-read from
 state (verify) - the deliberate silent no-op mock returns `verified=False` and is
 never reported as success. Multi-step failures roll back the committed step and
 flag rather than claim a half-done success. See `eval/idempotency_demo.py`.

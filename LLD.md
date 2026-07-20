@@ -70,6 +70,10 @@ flowchart LR
 | Mock systems | `mock/systems.py` | in-memory Okta/ServiceNow/IAM/SOC + idempotency + failure modes |
 | Ticket store | `mock/ticket_store.py` | `TicketStore` adapter (mock JIRA; real-JIRA stub) |
 | Seed | `mock/seed.py` | directory, accounts, fixtures |
+| Constants | `agent/constants.py` | `POLICY_DIR`, `Status` - single source for values used across modules |
+| Eval harness | `eval/run_eval.py` | runs a ticket set, writes decision log + report.csv + trace.json + RESULTS.md |
+| **State verifier** | `eval/verify_state.py` | **asserts real mock-system state, not the disposition label** (see §8) |
+| Demos | `eval/demo.py`, `idempotency_demo.py`, `schema_repro.py` | single-ticket trace; exactly-once proof; the empty-args repro |
 
 ---
 
@@ -79,7 +83,11 @@ flowchart LR
 Decision:            # what the LLM returns - a PROPOSAL, never executed directly
   disposition        # one of the six buckets
   citations[]        # PolicySpan(policy_id, section, text)
-  planned_tool_calls[]   # PlannedToolCall(tool, args)  - intent, not action
+  planned_tool_calls[]   # PlannedToolCall(tool, args) - intent, not action
+                         # args is list[Arg(name, value)], NOT a dict: a free-form
+                         # dict[str, Any] compiles to a schema with no declared
+                         # properties and the model returns {} every time.
+                         # call.arg_dict() decodes it back for the guard.
   reasoning
 
 ToolResult:          # what one executed tool produced
@@ -91,6 +99,10 @@ ToolResult:          # what one executed tool produced
 AuditRecord:         # one per ticket; source of log line, CSV row, JSON trace
   ticket_id, disposition, citations[], tool_results[], reasoning
   outcome, unsafe_action_count, notes[]
+
+Comment (ticket_store.py):   # author + text. Without an author the agent's own
+                     # questions and the requester's replies are indistinguishable
+                     # in the thread, and ASK cannot re-evaluate on reply.
 
 Tool (tools.py):     # a tool's whole safety contract, as data
   name, risk         # GREEN | GREEN* | AMBER | RED
@@ -184,10 +196,11 @@ action, not an executed one - that is why the unsafe count stays 0.
 
 | Name | Rule | Used by |
 |---|---|---|
-| `authorized` | `args.user == ticket.reporter` (self only; fails closed) | unlock, reset, grant_admin |
-| `risk_signals_clear` | `okta.risk_signals(user).clear` (E-04 vs E-10) | unlock |
+| `authorized` | two questions, both required: `args.user == ticket.reporter` (self only, fails closed) AND the directory reports that identity **found and active**. The second half matters because `user == reporter` is true for a terminated employee too (POL-10 §10.4). | unlock, reset, grant_admin |
+| `risk_signals_clear` | `okta.risk_signals(user).clear` (E-04 vs E-10). **Fails closed**: no target, or an account Okta has never heard of, is refused - "could not check" must never read as "is clear". | unlock |
 | `minutes_le_60` | Make-Me-Admin cap (POL-04 §4.6) | grant_admin |
-| `no_fan_out` | refuse team-wide / multi-target requests (blast radius) | unlock, reset, grant_admin, revoke, force_reset |
+| `no_fan_out` | refuse team-wide / multi-target requests (blast radius). Two independent branches: multi-target *args*, or a fan-out phrase in the *ticket body* - a model can narrow "reset the whole team" into one innocent-looking call, so the body is read too. | unlock, reset, grant_admin, revoke, force_reset, create_request, create_case |
+| `fields_target_self` | `create_request` / `create_case` take no top-level `user`, so `authorized` structurally cannot see their subject - it sits inside `fields`. This refuses a `fields` payload naming a third party. Deliberately lighter than `authorized` (an absent subject is fine): the blast radius is a ticket, not an entitlement. | create_request, create_case |
 
 Add a rule = one entry in `PRECHECKS` + list its name in a tool's `requires`. The
 guard loop never changes.
@@ -265,11 +278,27 @@ wraps its work in a `produce()` function and hands it to `_idempotent(key,
 produce)`, which runs it at most once per key and returns the stored result
 (flagged `idempotent_replay`) on a repeat. Keys mirror the catalog (e.g. unlock =
 `account + lock_epoch` -> `"jsmith:1001"`). A retry or duplicate never acts twice.
+The ledger is **namespaced per endpoint**: two tools may share a key *recipe*
+(`revoke_sessions`/`force_password_reset` are both user+incident;
+`open_incident`/`page_oncall` are both the ticket id) but must never share a
+ledger *slot*, or the second returns the first's cached response and never runs.
 
 **Verify** (`guard._did_effect_take` -> each tool's `verify`). After firing, the
 guard re-reads state. Failure mode 1 (silent no-op): the seeded `noopuser` unlock
 returns success but stays locked -> `verified=False` -> the handler flags instead
 of claiming success.
+
+**Two levels of verification.** `verify` above is *per tool call* - did this
+effect land? `eval/verify_state.py` is *per ticket* - did the disposition's
+artifact actually get produced? The second exists because `run_eval` grades the
+disposition **label**, and a label can be right while the work never happened:
+an approval never routed, an on-call never paged, both behind a clean decision
+log. It re-runs all 23 tickets and asserts nine invariants that must hold
+regardless of disposition (no AMBER ever executed, no RED outside an escalation,
+every state change verified and carrying an idempotency key, no unlock without a
+clear risk check, every citation real, no secret in agent-written text, no RED
+ticket closed) plus the artifact each disposition owes. Output is committed as
+`eval/STATE_VERIFICATION.md`; it exits non-zero on any failure.
 
 **Rollback** (`Step2Failure`). Failure mode 2: `assetmgmt.create_case` for the
 seeded `ASSET-FAIL` commits step 1 then raises `Step2Failure(rollback_id)`; the
@@ -286,11 +315,17 @@ duplicate is linked (no re-act); a withdrawal is honored (comment + close).
 - **Grounding.** Two layers: the prompt forbids prior-knowledge answers and
   requires a citation from provided spans; `_enforce_grounding` then validates
   each citation against the corpus and downgrades an ungrounded action to DEFER.
-- **Redaction.** `redaction.redact` masks secret shapes (api-key, tokens,
-  `password is X`) in all agent-written text and the prompt body.
+- **Redaction.** `redaction.redact` masks secret *values* in all agent-written
+  text and in the ticket body before it reaches the model - but **keeps the
+  label** (`password is [REDACTED-SECRET]`). Masking the label too destroys the
+  fact that a credential was disclosed, which is an ESCALATE trigger; the value
+  itself never reaches the model, a comment, or a log.
 - **Safety accounting.** `_count_unsafe` tallies any executed AMBER, or RED
-  outside escalation - always 0 because the guard prevents such runs;
-  `eval/run_eval.py` exits non-zero if it is ever > 0.
+  outside escalation; `eval/run_eval.py` exits non-zero if it is ever > 0. Note
+  what this number is and is not: the guard raises *before* a blocked call
+  reaches `tool_results`, so the counter is a receipt that nothing unsafe ran,
+  not a test of the guard. The guard is tested by `tests/test_guard.py`, which
+  forges the worst call a compromised model could propose and asserts refusal.
 
 ---
 
@@ -335,6 +370,9 @@ requester's own account; it **routes** AMBER (approval) and **escalates** RED.
 | Irreversible never inline | AMBER risk gate | `test_amber_*` |
 | Blast radius | `no_fan_out` + `self_target` | `test_fan_out_reset_blocked`, `test_pipeline_fan_out_downgraded_to_defer` |
 | Self vs on-behalf-of | `authorized` | `test_reset_blocked_for_on_behalf_of`, `test_reset_allowed_for_self` |
+| Terminated / unknown identity | `authorized` directory check (`found` + `active`) | `test_terminated_employee_cannot_act_on_their_own_account`, `test_unknown_identity_cannot_act` |
+| Third party named inside `fields` | `fields_target_self` | `test_case_cannot_be_filed_naming_someone_else`, `test_case_for_self_still_files` |
+| Unknown account risk signals | `risk_signals_clear` fails closed | `test_risk_signals_fail_closed_for_unknown_account` |
 | Retry/duplicate | idempotency + ingest dedup | `test_idempotency.py`, `idempotency_demo.py` |
 | Withdrawal | ingest gate | `test_withdrawn_ticket_is_honored_no_action` |
 | Silent no-op | verify | `test_silent_noop_unlock_is_caught` |
@@ -342,17 +380,22 @@ requester's own account; it **routes** AMBER (approval) and **escalates** RED.
 | Approval integrity | AMBER + `get_approval` | `test_get_approval_rebuts_missing_record` |
 | Injection | prompt + AMBER gate | `test_amber_disable_mfa_blocked...` |
 | Secrets redacted | `redaction.redact` | `tests/test_redaction.py` |
-| Non-existent policy | grounding gate | `test_hallucinated_citation_downgraded_to_defer` |
+| Non-existent policy | grounding gate | `test_hallucinated_citation_downgraded_to_defer`, `test_invalid_citation_dropped_valid_kept` |
+| ASK re-evaluates on reply | comment thread passed to the decider | `test_ask_then_reply_reevaluates` |
+| Asserted authority | never trusted; `iam.get_approval` checks the record | `test_verify_manager_checks_directory`, ADV-FAKEAPPROVAL trace |
 
 ---
 
 ## 13. Run it
 
 ```
-pytest                                       # 41 tests (safety/idempotency/failure/redaction/pipeline)
-python -m eval.run_eval                      # 17 worked examples: 14/17, 0 unsafe
+pytest                                       # 46 tests (safety/idempotency/failure/redaction/pipeline)
+python -m eval.run_eval                      # 17 worked examples: 17/17, 0 unsafe
 python -m eval.run_eval --examples eval/adversarial.json --out eval/adv   # 6/6, 0 unsafe
+python -m eval.verify_state                  # assert real system state on all 23 tickets
 python -m eval.idempotency_demo              # action once across retry + duplicate
 python -m eval.demo E-04                     # one action end-to-end
-python -m eval.demo E-13                     # one privileged request refused
+python -m eval.demo E-07                     # one privileged request refused AND routed
+python -m eval.demo E-13                     # a prompt-injection attempt refused
+python -m eval.schema_repro                  # the empty-args bug, in two API calls
 ```
