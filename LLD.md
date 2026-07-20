@@ -409,7 +409,52 @@ requester's own account; it **routes** AMBER (approval) and **escalates** RED.
 
 ---
 
-## 13. Run it
+## 13. The bug that made a green eval lie
+
+Recorded because it is why §8 has two levels of verification.
+
+Every tool call the model proposed arrived with **no arguments**. Tools taking
+only `user` still worked - the guard's `self_target` fallback fills it from the
+ticket reporter - so the happy path looked clean. Anything taking more
+(`open_incident(sev, summary)`, `create_approval(action, approvers)`,
+`grant_admin(user, minutes)`) raised `ToolInvocationError` on invocation and the
+handler downgraded it to DEFER.
+
+It was invisible because `run_eval` grades the disposition **label**. E-07 scored
+a match while never routing an approval. E-09 scored a match while never opening
+an incident, and then commented that the on-call team had been paged - a false
+claim of containment on a security ticket. The decision log was clean; the work
+never happened. Seven of 23 tickets were affected: three failed visibly and were
+explained away as the model being appropriately conservative, four passed while
+producing nothing.
+
+The cause was one field's type. A free-form `dict[str, Any]` compiles to a JSON
+schema with `additionalProperties: true` and **no declared properties**, and the
+model returns `{}` every time - regardless of prompt wording, field description,
+or being marked required (`{}` satisfies `required`; required means the key is
+present, not that it has content). `python -m eval.schema_repro` runs both shapes
+in one call each:
+
+```
+dict[str, Any]  -> args={}
+list[Arg]       -> args=[user=jsmith, minutes=30]
+```
+
+Same prompt, same model, same task. The schema silently overrides the prompt.
+
+Two related bugs surfaced in the same sweep, both equally invisible: two tool
+pairs shared an idempotency ledger slot, so `page_oncall` returned
+`open_incident`'s cached response and on-call was never paged; and redaction
+masked the label along with the value, blinding the decider to a leaked
+credential it was supposed to escalate. All three are recorded as regression
+traps in `CLAUDE.md`.
+
+The fix was small. The lesson was not: **grading the label is not grading the
+action** - which is why `eval/verify_state.py` exists.
+
+---
+
+## 14. Run it
 
 ```
 pytest                                       # 46 tests (safety/idempotency/failure/redaction/pipeline)
